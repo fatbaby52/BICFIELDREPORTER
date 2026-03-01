@@ -103,7 +103,7 @@ const globalCSS = `
   @media (max-width: 768px) {
     .desktop-sidebar { display: none !important; }
     .mobile-tabs { display: flex !important; }
-    .main-content { margin-left: 0 !important; padding-bottom: 88px !important; }
+    .main-content { margin-left: 0 !important; padding-top: 72px !important; }
   }
   @media (min-width: 769px) {
     .mobile-tabs { display: none !important; }
@@ -1241,41 +1241,177 @@ function Sidebar({ currentView, dispatch, projects, activeProjectId }) {
   );
 }
 
-function MobileNav({ currentView, dispatch }) {
-  const items = [
-    { id: "dashboard", icon: LayoutDashboard, label: "Home" },
-    { id: "dailyEntry", icon: ClipboardEdit, label: "Daily" },
-    { id: "weeklyGen", icon: CalendarRange, label: "Weekly" },
-    { id: "photos", icon: Image, label: "Photos" },
-    { id: "projectSetup", icon: FolderCog, label: "Setup" },
+function MobileNav({ currentView, dispatch, projects, activeProjectId }) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [projDropOpen, setProjDropOpen] = useState(false);
+  const activeProject = projects.find(p => p.id === activeProjectId);
+
+  const navItems = [
+    { id: "projects", icon: Building2, label: "Projects" },
+    { id: "dashboard", icon: LayoutDashboard, label: "Dashboard" },
+    { id: "projectSetup", icon: FolderCog, label: "Project Setup" },
+    { id: "dailyEntry", icon: ClipboardEdit, label: "Daily Entry" },
+    { id: "weeklyGen", icon: CalendarRange, label: "Weekly Report" },
+    { id: "photos", icon: Image, label: "Photo Gallery" },
   ];
+
+  const navigate = (view) => {
+    dispatch({ type: "SET_VIEW", view });
+    setDrawerOpen(false);
+    setProjDropOpen(false);
+  };
+
   return (
-    <nav className="mobile-tabs" style={{
-      position: "fixed", bottom: 0, left: 0, right: 0, height: "72px",
-      background: T.white, borderTop: `1px solid ${T.neutral[200]}`,
-      display: "flex", alignItems: "center", justifyContent: "space-around",
-      zIndex: 100, padding: "0 4px",
-    }}
-    role="navigation"
-    aria-label="Main navigation"
-    >
-      {items.map(item => {
-        const active = currentView === item.id;
-        return (
-          <button key={item.id} onClick={() => dispatch({ type: "SET_VIEW", view: item.id })}
-            aria-current={active ? "page" : undefined}
-            style={{
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px",
-              minWidth: "48px", minHeight: "48px", padding: "8px 12px",
-              border: "none", background: "transparent", cursor: "pointer",
-              color: active ? T.orange[500] : T.neutral[400],
-            }}>
-            <item.icon size={22} aria-hidden="true" />
-            <span style={{ fontSize: "11px", fontWeight: active ? 700 : 500 }}>{item.label}</span>
+    <>
+      {/* Top bar with hamburger */}
+      <div className="mobile-tabs" style={{
+        position: "fixed", top: 0, left: 0, right: 0, height: "56px",
+        background: T.navy[900], display: "flex", alignItems: "center",
+        justifyContent: "space-between", padding: "0 16px", zIndex: 200,
+      }}>
+        <button onClick={() => setDrawerOpen(!drawerOpen)}
+          aria-label={drawerOpen ? "Close menu" : "Open menu"}
+          style={{
+            width: "40px", height: "40px", border: "none", background: "transparent",
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+            color: T.white, borderRadius: T.radius.sm,
+          }}>
+          {drawerOpen ? <X size={24} /> : <Menu size={24} />}
+        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <img src={BIC_LOGO} alt="BIC" style={{ height: "28px", borderRadius: "4px" }} />
+          <span style={{ fontSize: "11px", fontWeight: 700, color: T.neutral[200], textTransform: "uppercase", letterSpacing: "0.08em" }}>Field Reporter</span>
+        </div>
+        <div style={{ width: "40px" }} />
+      </div>
+
+      {/* Overlay */}
+      {drawerOpen && (
+        <div onClick={() => { setDrawerOpen(false); setProjDropOpen(false); }}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+            zIndex: 250, transition: "opacity 0.2s",
+          }} />
+      )}
+
+      {/* Slide-out drawer */}
+      <nav className="mobile-tabs" style={{
+        position: "fixed", top: 0, left: 0, bottom: 0, width: "280px",
+        background: T.navy[900], zIndex: 300, display: "flex", flexDirection: "column",
+        transform: drawerOpen ? "translateX(0)" : "translateX(-100%)",
+        transition: "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+        overflowY: "auto",
+      }}
+        role="navigation"
+        aria-label="Main navigation"
+      >
+        {/* Drawer header */}
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${T.navy[700]}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <img src={BIC_LOGO} alt="BIC" style={{ height: "32px", borderRadius: "4px" }} />
+            <span style={{ fontSize: "11px", fontWeight: 700, color: T.neutral[200], textTransform: "uppercase", letterSpacing: "0.08em" }}>Field Reporter</span>
+          </div>
+          <button onClick={() => { setDrawerOpen(false); setProjDropOpen(false); }}
+            style={{ width: "32px", height: "32px", border: "none", background: "transparent", cursor: "pointer", color: T.neutral[400], display: "flex", alignItems: "center", justifyContent: "center", borderRadius: T.radius.sm }}>
+            <X size={20} />
           </button>
-        );
-      })}
-    </nav>
+        </div>
+
+        {/* Project switcher */}
+        {activeProject && (
+          <div style={{ padding: "12px 12px 0" }}>
+            <button onClick={() => setProjDropOpen(!projDropOpen)} style={{
+              width: "100%", padding: "10px 12px", borderRadius: T.radius.md,
+              background: T.navy[800], border: `1px solid ${T.navy[700]}`,
+              cursor: "pointer", display: "flex", alignItems: "center", gap: "10px",
+              color: T.white, textAlign: "left",
+            }}>
+              <div style={{
+                width: "28px", height: "28px", borderRadius: "6px", flexShrink: 0,
+                background: T.orange[600], display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: "11px", fontWeight: 800, color: T.white,
+              }}>{(activeProject.jobNumber || "?").slice(0, 3)}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: T.white, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {activeProject.jobName || "Untitled Project"}
+                </div>
+                <div style={{ fontSize: "11px", color: T.navy[400] }}>Job #{activeProject.jobNumber || "—"}</div>
+              </div>
+              <ChevronDown size={16} style={{ color: T.navy[400], flexShrink: 0, transform: projDropOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+            </button>
+
+            {projDropOpen && (
+              <div style={{
+                marginTop: "4px", background: T.navy[800], border: `1px solid ${T.navy[600]}`,
+                borderRadius: T.radius.md, overflow: "hidden",
+              }}>
+                {projects.map(p => (
+                  <button key={p.id} onClick={() => {
+                    dispatch({ type: "SELECT_PROJECT", id: p.id });
+                    setProjDropOpen(false);
+                  }}
+                    style={{
+                      width: "100%", padding: "10px 14px", border: "none", cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: "10px", textAlign: "left",
+                      background: p.id === activeProjectId ? T.navy[700] : "transparent",
+                      color: T.white,
+                    }}>
+                    <div style={{
+                      width: "22px", height: "22px", borderRadius: "4px", flexShrink: 0,
+                      background: p.id === activeProjectId ? T.orange[500] : T.navy[600],
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: "9px", fontWeight: 800, color: T.white,
+                    }}>{(p.jobNumber || "?").slice(0, 3)}</div>
+                    <div style={{ flex: 1, fontSize: "13px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {p.jobName || "Untitled Project"}
+                    </div>
+                    {p.id === activeProjectId && <Check size={14} style={{ color: T.orange[500] }} />}
+                  </button>
+                ))}
+                <button onClick={() => { dispatch({ type: "ADD_PROJECT" }); setProjDropOpen(false); setDrawerOpen(false); }}
+                  style={{
+                    width: "100%", padding: "10px 14px", border: "none", cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: "10px",
+                    background: "transparent", color: T.orange[400], borderTop: `1px solid ${T.navy[700]}`,
+                    fontSize: "13px", fontWeight: 600,
+                  }}>
+                  <Plus size={14} /> New Project
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Nav items */}
+        <div style={{ padding: "12px 12px", flex: 1, display: "flex", flexDirection: "column", gap: "2px" }}>
+          {navItems.map(item => {
+            const active = currentView === item.id || (item.id === "dailyEntry" && currentView === "dailyView");
+            const needsProject = !["projects"].includes(item.id);
+            const disabled = needsProject && !activeProject;
+            return (
+              <button key={item.id}
+                onClick={() => { if (!disabled) navigate(item.id); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: "12px", width: "100%",
+                  padding: "12px 14px", borderRadius: T.radius.md, border: "none",
+                  cursor: disabled ? "default" : "pointer",
+                  background: active ? T.navy[700] : "transparent",
+                  color: active ? T.white : disabled ? T.navy[600] : T.navy[400],
+                  opacity: disabled ? 0.5 : 1, fontSize: "14px", fontWeight: active ? 600 : 500,
+                }}>
+                <item.icon size={20} />
+                <span>{item.label}</span>
+                {active && <div style={{ width: "3px", height: "18px", background: T.orange[500], borderRadius: "2px", marginLeft: "auto" }} />}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ padding: "16px 20px", borderTop: `1px solid ${T.navy[700]}` }}>
+          <div style={{ fontSize: "11px", color: T.navy[500] }}>v1.0 Prototype</div>
+        </div>
+      </nav>
+    </>
   );
 }
 
@@ -2841,7 +2977,7 @@ export default function App() {
           </div>
         )}
         <Sidebar currentView={state.currentView} dispatch={dispatch} projects={state.projects} activeProjectId={state.activeProjectId} />
-        <MobileNav currentView={state.currentView} dispatch={dispatch} />
+        <MobileNav currentView={state.currentView} dispatch={dispatch} projects={state.projects} activeProjectId={state.activeProjectId} />
         <main id="main-content" className="main-content" style={{ marginLeft: "220px", padding: "32px", minHeight: "100vh" }} role="main">
           {renderView()}
         </main>
