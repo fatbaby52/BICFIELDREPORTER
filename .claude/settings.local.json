@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command \"[Convert]::ToBase64String\\([IO.File]::ReadAllBytes\\(''logo-blue.png''\\)\\)\")",
+      "Bash(copy \"C:\\\\Users\\\\johna\\\\desktop\\\\blue iron\\\\bic-website\\\\public\\\\images\\\\logo-blue.png\" \"C:\\\\Users\\\\johna\\\\desktop\\\\blue iron\\\\reports\\\\bic-field-reporter\\\\public\\\\logo-blue.png\")",
+      "Bash(powershell -Command:*)",
+      "Bash(npm run build:*)"
+    ]
+  }
+}
