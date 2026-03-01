@@ -735,72 +735,92 @@ const exportWeeklyPDF = (weekly, project) => {
 
   .page-break{page-break-before:always}
   @media print{
-    /* Print-friendly colors and layout preservation */
-    *,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
-    html,body{background:#fff!important;margin:0!important;padding:0!important;color:#1a2744!important}
+    /* Force browsers to print background colors and images exactly as on screen */
+    *,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
 
-    /* Page and core layouts */
-    .page{padding:20px!important;background:#fff!important;max-width:1100px;margin:0 auto}
+    /* Strip ONLY the properties that break printing — keep everything else */
+    *{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 
-    /* Header - preserve flex layout, switch to light colors */
-    .header{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;background:#f0f4f8!important;border:1px solid #d1d5db!important;padding:20px!important;margin-bottom:20px!important;border-radius:8px}
+    /* Body — keep the dark gradient background */
+    html,body{margin:0!important;padding:0!important}
+    body{background:#0a0f1a!important}
+
+    /* Page container */
+    .page{padding:24px!important;max-width:1100px;margin:0 auto}
+
+    /* Header — keep dark, preserve flex */
+    .header{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px!important;margin-bottom:24px!important;border-bottom:1px solid rgba(255,255,255,0.1)}
     .header-left{flex:1!important}
-    .header-right{text-align:right;background:#e8eef8!important;border:1px solid #cbd5e1!important;padding:12px 16px!important;border-radius:6px}
-    .week-ending{font-size:10px;color:#64748b;text-transform:uppercase}
-    .week-date{font-size:20px;font-weight:bold;color:#1a2744}
-    .report-badge{display:inline-block!important;background:#e8853a!important;color:#fff!important;padding:6px 12px!important;border-radius:4px;font-size:10px;font-weight:bold;text-transform:uppercase;margin-top:12px}
+    .header-right{text-align:right;background:#1a2744!important;padding:16px 20px!important;border-radius:10px;border:1px solid rgba(232,133,58,0.3)}
+    .week-ending{font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em}
+    .week-date{font-size:24px;font-weight:800;color:#fff}
+    .report-badge{display:inline-block!important;background:#e8853a!important;color:#fff!important;padding:6px 14px!important;border-radius:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-top:12px}
 
     /* Project title */
-    .project-title{text-align:center;margin:20px 0;color:#1a2744}
-    .project-title h1{font-size:22px;margin-bottom:4px;color:#1a2744}
-    .project-title .subtitle{color:#64748b;font-size:13px}
+    .project-title{text-align:center;margin:24px 0}
+    .project-title h1{font-size:26px;font-weight:800;color:#fff!important;margin-bottom:6px}
+    .project-title .subtitle{color:#8899b4!important;font-size:14px}
 
-    /* Main grid and flexbox layouts */
+    /* Preserve grid and flex layouts exactly */
     .main-grid{display:grid!important;grid-template-columns:1.5fr 1fr!important;gap:20px!important;margin-bottom:20px}
     .side-stack{display:flex!important;flex-direction:column!important;gap:16px!important}
     .two-col{display:grid!important;grid-template-columns:1fr 1fr!important;gap:16px!important}
 
-    /* Panels - light background with dark text */
-    .panel{display:block!important;background:#f8f9fa!important;border:1.5px solid #1a2744!important;border-radius:8px;padding:16px!important;margin-bottom:12px!important;color:#1a2744!important;page-break-inside:avoid}
-    .panel-title{color:#e8853a!important;font-weight:bold;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;padding-bottom:8px;border-bottom:2px solid #1a2744;display:flex!important;align-items:center!important;gap:10px!important}
-    .panel-title::before{content:'';width:4px;height:14px;background:#e8853a;border-radius:2px}
+    /* Panels — dark background, same as screen */
+    .panel{background:#111827!important;border:1px solid rgba(255,255,255,0.1)!important;border-radius:12px;padding:20px 24px!important;color:#fff!important;font-size:12px;page-break-inside:avoid;margin-bottom:12px}
+    .panel-title{color:#e8853a!important;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid rgba(255,255,255,0.1)!important;display:flex!important;align-items:center!important;gap:10px!important}
+    .panel-title.orange{color:#e8853a!important}
+    .panel-title.white{color:#fff!important}
+    .panel-title::before{content:''!important;display:inline-block!important;width:4px!important;height:14px!important;background:#e8853a!important;border-radius:2px!important;flex-shrink:0}
     .panel ul{display:block!important;list-style:none;padding:0}
-    .panel li{display:list-item!important;list-style:none;padding:8px 0;border-bottom:1px solid #e5e7eb;margin-left:0;color:#1a2744!important}
+    .panel li{display:flex!important;align-items:flex-start!important;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);color:#fff!important}
     .panel li:last-child{border-bottom:none}
-    .panel li::before{content:'→ ';color:#e8853a;font-weight:bold;margin-right:8px}
-    .panel .content{color:#374151!important;font-size:12px;line-height:1.6}
-    .panel .content:empty::before{content:'—';color:#9ca3af}
+    .panel li::before{content:'→'!important;color:#e8853a!important;font-weight:bold;flex-shrink:0}
+    .panel li span{color:#fff!important}
+    .panel li span.complete{color:#4ade80!important}
+    .panel .content{color:#c9d1e0!important;line-height:1.7}
+    .panel .content:empty::before{content:'—';color:#4b5563}
 
-    /* Info boxes */
-    .info-box{display:block!important;background:#f8f9fa!important;border:1.5px solid #1a2744!important;border-radius:8px;padding:16px!important;color:#1a2744!important}
+    /* Info row — preserve 3-column grid */
     .info-row{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:16px!important;margin-top:20px}
-    .info-box-title{color:#e8853a!important;font-weight:bold;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px}
-    .info-box-content{color:#374151!important;font-size:12px;line-height:1.6}
-    .info-box-content:empty::before{content:'—';color:#9ca3af}
-    .info-box.highlight{border-color:#e8853a!important;background:#fff7ed!important}
+    .info-box{background:rgba(17,24,39,0.8)!important;border:1px solid rgba(255,255,255,0.08)!important;border-radius:10px;padding:16px 20px!important;color:#fff!important}
+    .info-box-title{color:#8899b4!important;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px}
+    .info-box-content{color:#fff!important;font-size:12px;line-height:1.6}
+    .info-box-content:empty::before{content:'—';color:#4b5563}
+    .info-box.highlight{border-color:rgba(232,133,58,0.3)!important;background:rgba(232,133,58,0.08)!important}
+    .info-box.highlight .info-box-title{color:#e8853a!important}
 
-    /* Table layouts */
-    table{display:table!important;width:100%;border-collapse:collapse}
+    /* Milestone table — dark header */
+    table{display:table!important;width:100%;border-collapse:separate;border-spacing:0}
     tr{display:table-row!important}
-    th,td{display:table-cell!important;padding:10px;border-bottom:1px solid #e5e7eb;color:#1a2744}
-    .milestone-table{width:100%;border-collapse:collapse;font-size:11px;margin-top:12px;border-radius:8px;overflow:hidden}
-    .milestone-table th{background:#1a2744!important;color:#fff!important;padding:10px 16px;text-align:left;font-weight:600}
-    .milestone-table td{padding:10px 16px;border-bottom:1px solid #e5e7eb;color:#374151}
+    th,td{display:table-cell!important}
+    .milestone-table{width:100%;font-size:11px;margin-top:12px;border-radius:8px;overflow:hidden}
+    .milestone-table th{background:#1a2744!important;color:#fff!important;padding:12px 16px;text-align:left;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px}
+    .milestone-table td{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.05);color:#c9d1e0!important}
     .milestone-table tr:last-child td{border-bottom:none}
-    .milestone-table .complete{color:#16a34a;font-weight:600}
-    .milestone-table .pending{color:#e8853a}
+    .milestone-table .complete{color:#4ade80!important;font-weight:600}
+    .milestone-table .pending{color:#e8853a!important}
+    .milestone-legend{color:#6b7280!important;font-size:10px;font-style:italic;margin-top:8px}
 
-    /* Photo grid */
+    /* Green/red accent colors */
+    .green{color:#4ade80!important}
+    .red{color:#ef4444!important}
+    .orange{color:#e8853a!important}
+
+    /* Photo page — keep white background for photos */
     .photo-page{background:#fff!important}
     .photo-grid{display:grid!important;grid-template-columns:1fr 1fr!important;gap:24px!important}
-    .photo-card{display:block!important;border:2px solid #e5e7eb!important;border-radius:8px;margin-bottom:16px;overflow:hidden}
+    .photo-card{border:1px solid #e5e7eb!important;border-radius:12px;overflow:hidden;page-break-inside:avoid}
     .photo-card img{display:block!important;max-width:100%!important;height:auto!important;width:100%!important}
-    .photo-card-info{padding:12px 16px;background:#fff;color:#1a2744}
-    .photo-card-desc{font-size:14px;color:#1a2744;font-weight:600;margin-bottom:4px}
-    .photo-card-date{font-size:12px;color:#64748b}
+    .photo-card-info{padding:16px 20px;background:#fff!important;color:#1a2744!important}
+    .photo-card-desc{font-size:14px;color:#1a2744!important;font-weight:600;margin-bottom:4px}
+    .photo-card-date{font-size:12px;color:#6b7280!important}
 
     /* Footer */
-    .footer{text-align:center;margin-top:20px;padding-top:16px;border-top:2px solid #e5e7eb;color:#64748b;font-size:11px}
+    .footer{text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.1);color:#6b7280!important;font-size:11px}
+
+    /* Page break helper */
+    .page-break{page-break-before:always}
   }
 </style></head><body>
 <div class="page">

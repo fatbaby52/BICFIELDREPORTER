@@ -1,9 +1,19 @@
 exports.handler = async (event) => {
-  // Only allow POST requests
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS"
+  };
+
+  // Handle CORS preflight
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 204, headers: corsHeaders, body: "" };
+  }
+
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
-      headers: { "Access-Control-Allow-Origin": "*" },
+      headers: corsHeaders,
       body: JSON.stringify({ error: "Method not allowed" })
     };
   }
@@ -12,8 +22,8 @@ exports.handler = async (event) => {
   if (!apiKey) {
     return {
       statusCode: 500,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ error: "OpenAI API key not configured" })
+      headers: corsHeaders,
+      body: JSON.stringify({ error: "OpenAI API key not configured. Add OPENAI_API_KEY to Netlify environment variables." })
     };
   }
 
@@ -22,7 +32,7 @@ exports.handler = async (event) => {
     if (!question || !question.trim()) {
       return {
         statusCode: 400,
-        headers: { "Access-Control-Allow-Origin": "*" },
+        headers: corsHeaders,
         body: JSON.stringify({ error: "No question provided" })
       };
     }
@@ -75,7 +85,7 @@ Incidents: ${r.incidents || "None"}
       console.error("OpenAI API error:", response.status, errorData);
       return {
         statusCode: response.status,
-        headers: { "Access-Control-Allow-Origin": "*" },
+        headers: corsHeaders,
         body: JSON.stringify({ error: "Failed to answer question with OpenAI" })
       };
     }
@@ -85,14 +95,14 @@ Incidents: ${r.incidents || "None"}
 
     return {
       statusCode: 200,
-      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ answer })
     };
   } catch (error) {
     console.error("Error:", error);
     return {
       statusCode: 500,
-      headers: { "Access-Control-Allow-Origin": "*" },
+      headers: corsHeaders,
       body: JSON.stringify({ error: error.message || "Internal server error" })
     };
   }
