@@ -9,7 +9,7 @@ const {
   X, AlertTriangle, Clock, Download, Eye, Edit3, Save, ArrowLeft,
   Building2, HardHat, Truck, Wrench, Users, Calendar, MapPin,
   FileSpreadsheet, FileDown, Menu, ChevronLeft, CircleDot, Search,
-  Filter, Tag, TriangleAlert, CheckCircle2, Circle, Loader2
+  Filter, Tag, TriangleAlert, CheckCircle2, Circle, Loader2, ChevronUp
 } = lucide;
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2159,19 +2159,42 @@ function DailyEntry({ state, dispatch }) {
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", fontSize: "12px", fontWeight: 600, color: T.neutral[500], marginBottom: "6px" }}>
             <span>Role</span><span style={{ textAlign: "center" }}>Day</span><span style={{ textAlign: "center" }}>Night</span>
           </div>
-          {workforceRoles.map(r => (
-            <div key={r.key} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", marginBottom: "4px", alignItems: "center" }}>
-              <span style={{ fontSize: "13px", color: T.navy[700] }}>{r.label}</span>
-              <input type="number" min="0" value={report.workforce[r.key]?.day || 0}
-                onChange={e => updateWorkforce(r.key, "day", e.target.value)}
-                style={{ width: "100%", padding: "6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", textAlign: "center", outline: "none" }}
-              />
-              <input type="number" min="0" value={report.workforce[r.key]?.night || 0}
-                onChange={e => updateWorkforce(r.key, "night", e.target.value)}
-                style={{ width: "100%", padding: "6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", textAlign: "center", outline: "none" }}
-              />
-            </div>
-          ))}
+          {workforceRoles.map(r => {
+            const dayVal = report.workforce[r.key]?.day || 0;
+            const nightVal = report.workforce[r.key]?.night || 0;
+            const stepperBtn = (onClick, icon) => (
+              <button onClick={onClick} style={{
+                width: "28px", height: "28px", border: "none", borderRadius: "6px",
+                background: T.neutral[100], cursor: "pointer", display: "flex",
+                alignItems: "center", justifyContent: "center", color: T.navy[700],
+                transition: "all 0.15s", flexShrink: 0,
+              }}
+                onMouseEnter={e => { e.currentTarget.style.background = T.orange[100]; e.currentTarget.style.color = T.orange[600]; }}
+                onMouseLeave={e => { e.currentTarget.style.background = T.neutral[100]; e.currentTarget.style.color = T.navy[700]; }}
+              >{icon}</button>
+            );
+            return (
+              <div key={r.key} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", marginBottom: "4px", alignItems: "center" }}>
+                <span style={{ fontSize: "13px", color: T.navy[700] }}>{r.label}</span>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }}>
+                  {stepperBtn(() => updateWorkforce(r.key, "day", Math.max(0, dayVal - 1)), <ChevronDown size={14} />)}
+                  <span style={{
+                    minWidth: "28px", textAlign: "center", fontSize: "14px", fontWeight: 700,
+                    color: dayVal > 0 ? T.navy[800] : T.neutral[300],
+                  }}>{dayVal}</span>
+                  {stepperBtn(() => updateWorkforce(r.key, "day", dayVal + 1), <ChevronUp size={14} />)}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }}>
+                  {stepperBtn(() => updateWorkforce(r.key, "night", Math.max(0, nightVal - 1)), <ChevronDown size={14} />)}
+                  <span style={{
+                    minWidth: "28px", textAlign: "center", fontSize: "14px", fontWeight: 700,
+                    color: nightVal > 0 ? T.navy[800] : T.neutral[300],
+                  }}>{nightVal}</span>
+                  {stepperBtn(() => updateWorkforce(r.key, "night", nightVal + 1), <ChevronUp size={14} />)}
+                </div>
+              </div>
+            );
+          })}
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", marginTop: "8px", paddingTop: "8px", borderTop: `2px solid ${T.navy[800]}` }}>
             <span style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800] }}>Total</span>
             <span style={{ textAlign: "center", fontWeight: 700, fontSize: "14px", color: T.orange[500] }}>{totalDay}</span>
