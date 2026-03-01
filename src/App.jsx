@@ -1373,7 +1373,21 @@ function ProjectAI({ state, project }) {
 
     setLoading(true);
     try {
-      const dailyReports = state.dailyReports.filter(r => r.projectId === project.id);
+      // Send only essential fields — full reports with photos/base64 would be too large
+      const trimmedReports = state.dailyReports
+        .filter(r => r.projectId === project.id)
+        .slice(-15)
+        .map(r => ({
+          date: r.date,
+          weather: r.weather,
+          shift: r.shift,
+          generalNotes: r.generalNotes ? r.generalNotes.substring(0, 500) : "",
+          incidents: r.incidents,
+          delaysProblems: r.delaysProblems,
+          extraWork: r.extraWork,
+          materialDeliveries: r.materialDeliveries,
+          workforce: r.workforce
+        }));
       const response = await fetch("/.netlify/functions/project-qa", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1386,7 +1400,7 @@ function ProjectAI({ state, project }) {
             location: project.location,
             milestones: project.milestones
           },
-          dailyReports: dailyReports
+          dailyReports: trimmedReports
         })
       });
 

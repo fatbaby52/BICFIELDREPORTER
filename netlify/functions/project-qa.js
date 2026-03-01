@@ -61,7 +61,12 @@ Incidents: ${r.incidents || "None"}
 `).join("\n---\n") || "No daily reports"}
 `;
 
-    const systemPrompt = `You are a construction project assistant. Answer questions about the project based on the provided project information and daily reports. Be concise but thorough. Focus on specific facts from the reports.`;
+    // Safety truncation — keep context under ~12k chars to stay within token limits
+    const safeContext = projectContext.length > 12000
+      ? projectContext.substring(0, 12000) + "\n\n[... additional reports truncated for length]"
+      : projectContext;
+
+    const systemPrompt = `You are a construction project assistant. Answer questions about the project based on the provided project information and daily reports. Be concise but thorough. Focus on specific facts from the reports. If you don't have enough data to answer confidently, say so.`;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -73,7 +78,7 @@ Incidents: ${r.incidents || "None"}
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `${projectContext}\n\nQuestion: ${question}` }
+          { role: "user", content: `${safeContext}\n\nQuestion: ${question}` }
         ],
         temperature: 0.7,
         max_tokens: 1500
