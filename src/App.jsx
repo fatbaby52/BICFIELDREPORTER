@@ -579,8 +579,9 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
       <div class="report-type">Daily Field Report</div>
     </div>
     <div class="date-box">
-      <div class="date">${fmtDate(report.date)}</div>
-      <div class="meta">${report.weather}</div>
+      <div style="font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Report Date</div>
+      <div class="date">${fmtDateShort(report.date)}</div>
+      <div class="meta" style="margin-top:8px">${report.day} · ${report.weather}</div>
       <div class="meta">Shift: ${report.shift.hours} ${report.shift.type}</div>
       <div class="meta">Incidents: ${report.incidents || "None"}</div>
     </div>
@@ -663,7 +664,7 @@ const exportWeeklyPDF = (weekly, project) => {
   .page{max-width:1100px;width:100%;margin:0 auto;padding:32px}
 
   /* Header */
-  .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid rgba(255,255,255,0.1)}
+  .header,.header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid rgba(255,255,255,0.1)}
   .header-left{flex:1}
   .header-right{text-align:right;background:linear-gradient(135deg,rgba(232,133,58,0.2) 0%,rgba(232,133,58,0.05) 100%);padding:20px 24px;border-radius:12px;border:1px solid rgba(232,133,58,0.3)}
   .report-badge{display:inline-block;background:linear-gradient(135deg,#e8853a 0%,#f59e0b 100%);color:#fff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;padding:8px 16px;border-radius:6px;margin-top:16px}
@@ -733,6 +734,12 @@ const exportWeeklyPDF = (weekly, project) => {
   .photo-card-desc{font-size:14px;color:#1a2744;font-weight:600;margin-bottom:4px}
   .photo-card-date{font-size:12px;color:#6b7280}
 
+  /* Repeating header table structure */
+  .report-wrapper{display:table;width:100%}
+  .repeating-header{display:table-header-group}
+  .repeating-header .header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid rgba(255,255,255,0.1)}
+  .report-body{display:table-row-group}
+
   .page-break{page-break-before:always}
   @media print{
     /* Force browsers to print background colors and images exactly as on screen */
@@ -749,7 +756,7 @@ const exportWeeklyPDF = (weekly, project) => {
     .page{padding:24px!important;max-width:1100px;margin:0 auto}
 
     /* Header — keep dark, preserve flex */
-    .header{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px!important;margin-bottom:24px!important;border-bottom:1px solid rgba(255,255,255,0.1)}
+    .header,.header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px!important;margin-bottom:24px!important;border-bottom:1px solid rgba(255,255,255,0.1)}
     .header-left{flex:1!important}
     .header-right{text-align:right;background:#1a2744!important;padding:16px 20px!important;border-radius:10px;border:1px solid rgba(232,133,58,0.3)}
     .week-ending{font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em}
@@ -819,21 +826,31 @@ const exportWeeklyPDF = (weekly, project) => {
     /* Footer */
     .footer{text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.1);color:#6b7280!important;font-size:11px}
 
+    /* Repeating header on every printed page */
+    .report-wrapper{display:table!important;width:100%!important}
+    .repeating-header{display:table-header-group!important}
+    .repeating-header .header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px 0!important;margin-bottom:20px!important;border-bottom:1px solid rgba(255,255,255,0.1)!important}
+    .report-body{display:table-row-group!important}
+
     /* Page break helper */
     .page-break{page-break-before:always}
   }
 </style></head><body>
 <div class="page">
-  <div class="header">
-    <div class="header-left">
-      ${BIC_LOGO_WHITE}
-      <div class="report-badge">Weekly Progress Report</div>
+  <div class="report-wrapper">
+    <div class="repeating-header">
+      <div class="header-inner">
+        <div class="header-left">
+          ${BIC_LOGO_WHITE}
+          <div class="report-badge">Weekly Progress Report</div>
+        </div>
+        <div class="header-right">
+          <div class="week-ending">Week Ending</div>
+          <div class="week-date">${fmtD(weekly.weekEnding)}</div>
+        </div>
+      </div>
     </div>
-    <div class="header-right">
-      <div class="week-ending">Week Ending</div>
-      <div class="week-date">${fmtD(weekly.weekEnding)}</div>
-    </div>
-  </div>
+    <div class="report-body">
 
   <div class="project-title">
     <h1>${project.jobName}</h1>
@@ -910,6 +927,9 @@ const exportWeeklyPDF = (weekly, project) => {
   <div class="footer">
     <div class="footer-text">Generated ${new Date().toLocaleDateString()} · Blue Iron Corporation</div>
   </div>
+
+    </div><!-- end report-body -->
+  </div><!-- end report-wrapper -->
 </div>
 
 ${(weekly.selectedPhotos || []).filter(p => p.selected !== false).length > 0 ? `
