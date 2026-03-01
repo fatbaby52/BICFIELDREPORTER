@@ -1907,9 +1907,10 @@ function DailyEntry({ state, dispatch }) {
   const project = getActiveProject(state);
   const [isRecording, setIsRecording] = useState(false);
   const [photoDesc, setPhotoDesc] = useState("");
-  const [aiRevising, setAiRevising] = useState(false);
+  const [aiRevising, setAiRevising] = useState(null); // stores the field key being revised, e.g. "generalNotes"
   const [aiRevisedText, setAiRevisedText] = useState("");
-  const [showAiPreview, setShowAiPreview] = useState(false);
+  const [aiPreviewField, setAiPreviewField] = useState(null); // which field is showing the preview
+  const [voiceTarget, setVoiceTarget] = useState("generalNotes"); // which field voice is recording into
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -1949,7 +1950,7 @@ function DailyEntry({ state, dispatch }) {
     update({ equipmentDown: down ? report.equipmentDown.filter(e => e !== id) : [...report.equipmentDown, id] });
   };
 
-  const handleVoice = () => {
+  const handleVoice = (fieldKey = "generalNotes") => {
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
@@ -1962,6 +1963,7 @@ function DailyEntry({ state, dispatch }) {
       return;
     }
 
+    setVoiceTarget(fieldKey);
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -1980,9 +1982,9 @@ function DailyEntry({ state, dispatch }) {
           interim = transcript;
         }
       }
-      const currentNotes = report.generalNotes || "";
-      const separator = currentNotes && !currentNotes.endsWith(" ") && !currentNotes.endsWith("\n") ? " " : "";
-      update({ generalNotes: currentNotes.trimEnd() + separator + finalTranscript + interim });
+      const currentVal = report[fieldKey] || "";
+      const separator = currentVal && !currentVal.endsWith(" ") && !currentVal.endsWith("\n") ? " " : "";
+      update({ [fieldKey]: currentVal.trimEnd() + separator + finalTranscript + interim });
     };
 
     recognition.onerror = (event) => {
@@ -2001,18 +2003,19 @@ function DailyEntry({ state, dispatch }) {
     setIsRecording(true);
   };
 
-  const handleReviseNotes = async () => {
-    if (!report.generalNotes || !report.generalNotes.trim()) {
-      alert("Please add some general notes first.");
+  const handleReviseField = async (fieldKey) => {
+    const text = report[fieldKey];
+    if (!text || !text.trim()) {
+      alert("Please add some text first.");
       return;
     }
 
-    setAiRevising(true);
+    setAiRevising(fieldKey);
     try {
       const response = await fetch("/.netlify/functions/revise-notes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: report.generalNotes })
+        body: JSON.stringify({ notes: text })
       });
 
       if (!response.ok) {
@@ -2021,14 +2024,40 @@ function DailyEntry({ state, dispatch }) {
 
       const data = await response.json();
       setAiRevisedText(data.revised);
-      setShowAiPreview(true);
+      setAiPreviewField(fieldKey);
     } catch (error) {
       console.error("Error revising notes:", error);
       alert("Failed to revise notes. Please try again.");
     } finally {
-      setAiRevising(false);
+      setAiRevising(null);
     }
   };
+
+  // Reusable voice + AI buttons for any text field
+  const FieldTools = ({ fieldKey }) => (
+    <>
+      <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+        <Btn variant={isRecording && voiceTarget === fieldKey ? "danger" : "secondary"} icon={isRecording && voiceTarget === fieldKey ? MicOff : Mic} size="sm"
+          onClick={() => handleVoice(fieldKey)}>
+          {isRecording && voiceTarget === fieldKey ? "Stop" : "Voice Note"}
+        </Btn>
+        <Btn variant="secondary" icon={Sparkles} size="sm" onClick={() => handleReviseField(fieldKey)} disabled={aiRevising === fieldKey}>
+          {aiRevising === fieldKey ? "Revising..." : "Revise with AI"}
+        </Btn>
+      </div>
+      {aiPreviewField === fieldKey && (
+        <div style={{ background: T.orange[100], border: `1px solid ${T.orange[500]}`, borderRadius: T.radius.md, padding: "16px", marginTop: "8px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 600, color: T.orange[600], marginBottom: "8px", textTransform: "uppercase" }}>AI Revision Preview</div>
+          <div style={{ fontSize: "13px", color: T.navy[800], lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: "12px" }}>{aiRevisedText}</div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <Btn size="sm" icon={Check} onClick={() => { update({ [fieldKey]: aiRevisedText }); setAiPreviewField(null); setAiRevisedText(""); }}>Accept</Btn>
+            <Btn variant="secondary" size="sm" onClick={() => { update({ [fieldKey]: aiRevisedText }); setAiPreviewField(null); setAiRevisedText(""); }}>Edit</Btn>
+            <Btn variant="ghost" size="sm" onClick={() => { setAiPreviewField(null); setAiRevisedText(""); }}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   const addPhoto = (file) => {
     if (!file) return;
@@ -2112,45 +2141,8 @@ function DailyEntry({ state, dispatch }) {
         <SectionTitle icon={Edit3}>General Notes</SectionTitle>
         <TextArea value={report.generalNotes} onChange={e => update({ generalNotes: e.target.value })}
           placeholder="Describe today's work activities, observations, and updates..."
-          style={{ marginBottom: "12px" }}
         />
-        <div style={{ display: "flex", gap: "8px", marginBottom: showAiPreview ? "12px" : "0" }}>
-          <Btn variant={isRecording ? "danger" : "secondary"} icon={isRecording ? MicOff : Mic} size="sm"
-            onClick={handleVoice}>
-            {isRecording ? "Stop Recording" : "Voice Note"}
-          </Btn>
-          <Btn variant="secondary" icon={Sparkles} size="sm" onClick={handleReviseNotes} disabled={aiRevising}>
-            {aiRevising ? "Revising..." : "Revise with AI"}
-          </Btn>
-        </div>
-
-        {showAiPreview && (
-          <div style={{ background: T.orange[100], border: `1px solid ${T.orange[500]}`, borderRadius: T.radius.md, padding: "16px", marginBottom: "12px" }}>
-            <div style={{ fontSize: "12px", fontWeight: 600, color: T.orange[600], marginBottom: "8px", textTransform: "uppercase" }}>AI Revision Preview</div>
-            <div style={{ fontSize: "13px", color: T.navy[800], lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: "12px" }}>
-              {aiRevisedText}
-            </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <Btn size="sm" icon={Check} onClick={() => {
-                update({ generalNotes: aiRevisedText });
-                setShowAiPreview(false);
-                setAiRevisedText("");
-              }}>
-                Accept
-              </Btn>
-              <Btn variant="secondary" size="sm" onClick={() => {
-                update({ generalNotes: aiRevisedText });
-                setShowAiPreview(false);
-                setAiRevisedText("");
-              }}>
-                Edit
-              </Btn>
-              <Btn variant="ghost" size="sm" onClick={() => setShowAiPreview(false)}>
-                Cancel
-              </Btn>
-            </div>
-          </div>
-        )}
+        <FieldTools fieldKey="generalNotes" />
       </Card>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
@@ -2318,11 +2310,13 @@ function DailyEntry({ state, dispatch }) {
             onChange={e => update({ thirdPartyUtilities: e.target.value })} placeholder="Note any third-party utility work..."
             style={{ fontSize: "13px" }}
           />
+          <FieldTools fieldKey="thirdPartyUtilities" />
         </Card>
         <Card>
           <TextArea label="Material Deliveries" value={report.materialDeliveries}
             onChange={e => update({ materialDeliveries: e.target.value })} placeholder="Note any material deliveries..."
           />
+          <FieldTools fieldKey="materialDeliveries" />
         </Card>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
@@ -2330,11 +2324,13 @@ function DailyEntry({ state, dispatch }) {
           <TextArea label="Delays / Problems" value={report.delaysProblems}
             onChange={e => update({ delaysProblems: e.target.value })} placeholder="Document any delays or problems..."
           />
+          <FieldTools fieldKey="delaysProblems" />
         </Card>
         <Card>
           <TextArea label="Extra Work / Claims / Misc." value={report.extraWork}
             onChange={e => update({ extraWork: e.target.value })} placeholder="Note extra work, claims, or miscellaneous..."
           />
+          <FieldTools fieldKey="extraWork" />
         </Card>
       </div>
 
@@ -2371,22 +2367,44 @@ function DailyEntry({ state, dispatch }) {
           <Btn icon={Camera} variant="secondary" onClick={() => cameraInputRef.current?.click()}>Camera</Btn>
         </div>
         {(report.photos || []).length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "12px" }}>
             {report.photos.map((p, i) => (
               <div key={p.id} style={{
-                border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, padding: "8px",
-                background: T.neutral[50], textAlign: "center", position: "relative",
+                border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md,
+                background: T.neutral[50], overflow: "hidden",
               }}>
                 {p.url ? (
-                  <img src={p.url} alt={p.description} style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "6px" }} />
+                  <img src={p.url} alt={p.description} style={{ width: "100%", height: "120px", objectFit: "cover", display: "block" }} />
                 ) : (
-                  <Camera size={32} style={{ color: T.neutral[300], margin: "8px auto" }} />
+                  <div style={{ height: "120px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Camera size={32} style={{ color: T.neutral[300] }} />
+                  </div>
                 )}
-                <div style={{ fontSize: "12px", color: T.navy[700], marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.description}</div>
-                <button onClick={() => update({ photos: report.photos.filter((_, j) => j !== i) })}
-                  style={{ background: "transparent", border: "none", cursor: "pointer", color: T.red[500], fontSize: "11px", marginTop: "4px" }}>
-                  Remove
-                </button>
+                <div style={{ padding: "8px" }}>
+                  <input
+                    value={p.description}
+                    onChange={e => {
+                      const updatedPhotos = [...report.photos];
+                      updatedPhotos[i] = { ...updatedPhotos[i], description: e.target.value };
+                      update({ photos: updatedPhotos });
+                    }}
+                    placeholder="Add description..."
+                    style={{
+                      width: "100%", fontSize: "12px", color: T.navy[700], padding: "4px 6px",
+                      border: `1px solid transparent`, borderRadius: T.radius.sm, outline: "none",
+                      background: "transparent", fontFamily: T.font,
+                    }}
+                    onFocus={e => { e.target.style.borderColor = T.neutral[200]; e.target.style.background = T.white; }}
+                    onBlur={e => { e.target.style.borderColor = "transparent"; e.target.style.background = "transparent"; }}
+                  />
+                  <button onClick={() => update({ photos: report.photos.filter((_, j) => j !== i) })}
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400], fontSize: "11px", marginTop: "4px", display: "flex", alignItems: "center", gap: "4px" }}
+                    onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = T.neutral[400]; }}
+                  >
+                    <Trash2 size={12} /> Remove
+                  </button>
+                </div>
               </div>
             ))}
           </div>
