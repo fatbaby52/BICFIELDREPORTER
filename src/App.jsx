@@ -2114,33 +2114,30 @@ function DailyEntry({ state, dispatch }) {
 
   // Resize & compress an image file using canvas — returns a much smaller JPEG data URL
   const compressImage = (file, maxDim = 1600, quality = 0.7) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = reject;
-    reader.onload = () => {
-      const img = new window.Image();
-      img.onerror = reject;
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          const scale = maxDim / Math.max(width, height);
-          width = Math.round(width * scale);
-          height = Math.round(height * scale);
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
-        // Revoke object URL to free memory
-        URL.revokeObjectURL(img.src);
-        resolve(dataUrl);
-      };
-      // Use object URL instead of base64 to avoid doubling memory
-      const blob = new Blob([reader.result], { type: file.type });
-      img.src = URL.createObjectURL(blob);
+    // File IS a Blob — create object URL directly, no FileReader needed
+    const objectUrl = URL.createObjectURL(file);
+    const img = new window.Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        const scale = maxDim / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      URL.revokeObjectURL(objectUrl);
+      resolve(dataUrl);
     };
-    reader.readAsArrayBuffer(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error(`Failed to load image: ${file.name}`));
+    };
+    img.src = objectUrl;
   });
 
   // Create a small thumbnail for grid display
