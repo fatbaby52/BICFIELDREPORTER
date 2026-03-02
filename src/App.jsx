@@ -3295,8 +3295,43 @@ export default function App() {
               loadDailyReports(),
               loadWeeklyReports(),
             ]);
+
+            // Supabase doesn't store base64 photo data (too large).
+            // Merge photo image data (url, thumb) from local IndexedDB back into Supabase records.
+            if (localState) {
+              const localDailyMap = new Map((localState.dailyReports || []).map(r => [r.id, r]));
+              const localWeeklyMap = new Map((localState.weeklyReports || []).map(r => [r.id, r]));
+
+              dailyReports.forEach(r => {
+                const local = localDailyMap.get(r.id);
+                if (local?.photos?.length && r.photos?.length) {
+                  const localPhotoMap = new Map(local.photos.filter(p => p.id).map(p => [p.id, p]));
+                  r.photos = r.photos.map(p => {
+                    const lp = localPhotoMap.get(p.id);
+                    return lp ? { ...p, url: lp.url || p.url, thumb: lp.thumb || p.thumb } : p;
+                  });
+                } else if (local?.photos?.length && (!r.photos || r.photos.length === 0)) {
+                  // Supabase has no photos (save may have failed), keep local photos
+                  r.photos = local.photos;
+                }
+              });
+
+              weeklyReports.forEach(r => {
+                const local = localWeeklyMap.get(r.id);
+                if (local?.selectedPhotos?.length && r.selectedPhotos?.length) {
+                  const localPhotoMap = new Map(local.selectedPhotos.filter(p => p.id).map(p => [p.id, p]));
+                  r.selectedPhotos = r.selectedPhotos.map(p => {
+                    const lp = localPhotoMap.get(p.id);
+                    return lp ? { ...p, url: lp.url || p.url, thumb: lp.thumb || p.thumb } : p;
+                  });
+                } else if (local?.selectedPhotos?.length && (!r.selectedPhotos || r.selectedPhotos.length === 0)) {
+                  r.selectedPhotos = local.selectedPhotos;
+                }
+              });
+            }
+
             dispatch({ type: "LOAD_DATA", projects, dailyReports, weeklyReports });
-            console.log("Synced with Supabase");
+            console.log("Synced with Supabase (photos merged from local)");
           } catch (err) {
             console.error("Failed to sync with Supabase, using local data:", err);
           }

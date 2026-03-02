@@ -23,6 +23,11 @@ const fromDbProject = (row) => ({
   equipmentRented: row.equipment_rented || [],
 })
 
+// Strip base64 image data from photos before saving to Supabase
+// (base64 URLs are too large for DB rows — image data stays in IndexedDB only)
+const stripPhotoData = (photos) =>
+  (photos || []).map(({ url, thumb, ...meta }) => meta);
+
 const toDbDaily = (r) => ({
   id: r.id,
   project_id: r.projectId,
@@ -40,7 +45,7 @@ const toDbDaily = (r) => ({
   delays_problems: r.delaysProblems || '',
   extra_work: r.extraWork || '',
   milestone_hit: r.milestoneHit || null,
-  photos: r.photos || [],
+  photos: stripPhotoData(r.photos),
   prepared_by: r.preparedBy || '',
 })
 
@@ -81,7 +86,7 @@ const toDbWeekly = (w) => ({
   hindrances: w.hindrances || '',
   additional_delays: w.additionalDelays || '',
   next_oac_meeting: w.nextOACMeeting || '',
-  selected_photos: w.selectedPhotos || [],
+  selected_photos: stripPhotoData(w.selectedPhotos),
 })
 
 const fromDbWeekly = (row) => ({
