@@ -12,7 +12,7 @@ const {
   Building2, HardHat, Truck, Wrench, Users, Calendar, MapPin,
   FileSpreadsheet, FileDown, Menu, ChevronLeft, CircleDot, Search,
   Filter, Tag, TriangleAlert, CheckCircle2, Circle, Loader2, ChevronUp,
-  Wifi, WifiOff, RefreshCw, CloudOff, Shield
+  Wifi, WifiOff, RefreshCw, CloudOff, Shield, Star
 } = lucide;
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2109,60 +2109,50 @@ function DailyEntry({ state, dispatch }) {
     </>
   );
 
-  const addPhoto = (file) => {
-    if (!file) return;
+  const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N } or null
+
+  const readFileAsDataURL = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const newPhoto = {
-        id: `ph-${Date.now()}`,
-        url: e.target.result,
-        title: photoDesc || "Photo " + ((report.photos?.length || 0) + 1),
-        description: "",
-        includeInWeekly: false
-      };
-      update({ photos: [...(report.photos || []), newPhoto] });
-      setPhotoDesc("");
-    };
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
     reader.readAsDataURL(file);
-  };
+  });
 
-  const addMultiplePhotos = (files) => {
-    if (!files || files.length === 0) return;
-    const baseCount = (report.photos?.length || 0);
-    const baseTitle = photoDesc || "";
-    let loaded = 0;
-    const newPhotos = [];
-    files.forEach((file, i) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        newPhotos[i] = {
-          id: `ph-${Date.now()}-${i}`,
-          url: e.target.result,
-          title: files.length === 1
-            ? (baseTitle || "Photo " + (baseCount + 1))
-            : (baseTitle ? `${baseTitle} (${i + 1})` : "Photo " + (baseCount + i + 1)),
-          description: "",
-          includeInWeekly: false
-        };
-        loaded++;
-        if (loaded === files.length) {
-          update({ photos: [...(report.photos || []), ...newPhotos.filter(Boolean)] });
-          setPhotoDesc("");
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const handleFileSelect = (e) => {
+  const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
-    if (files.length === 1) {
-      addPhoto(files[0]);
-    } else {
-      addMultiplePhotos(files);
-    }
     e.target.value = "";
+
+    const baseCount = (report.photos?.length || 0);
+    const baseTitle = photoDesc || "";
+    const batchSize = 5; // Process 5 at a time to avoid memory issues
+    const allNewPhotos = [];
+
+    if (files.length > 1) setUploadProgress({ done: 0, total: files.length });
+
+    for (let i = 0; i < files.length; i += batchSize) {
+      const batch = files.slice(i, i + batchSize);
+      const batchResults = await Promise.all(batch.map(async (file, batchIdx) => {
+        const globalIdx = i + batchIdx;
+        const dataUrl = await readFileAsDataURL(file);
+        return {
+          id: `ph-${Date.now()}-${globalIdx}`,
+          url: dataUrl,
+          title: files.length === 1
+            ? (baseTitle || "Photo " + (baseCount + 1))
+            : (baseTitle ? `${baseTitle} (${globalIdx + 1})` : "Photo " + (baseCount + globalIdx + 1)),
+          description: "",
+          starred: false,
+          includeInWeekly: false,
+        };
+      }));
+      allNewPhotos.push(...batchResults);
+      if (files.length > 1) setUploadProgress({ done: allNewPhotos.length, total: files.length });
+    }
+
+    update({ photos: [...(report.photos || []), ...allNewPhotos] });
+    setPhotoDesc("");
+    setUploadProgress(null);
   };
 
   const workforceRoles = [
@@ -2451,60 +2441,119 @@ function DailyEntry({ state, dispatch }) {
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
         <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
           <Input placeholder="Photo title (optional)..." value={photoDesc} onChange={e => setPhotoDesc(e.target.value)} style={{ flex: 1 }} />
-          <Btn icon={Upload} variant="secondary" onClick={() => fileInputRef.current?.click()}>Upload</Btn>
-          <Btn icon={Camera} variant="secondary" onClick={() => cameraInputRef.current?.click()}>Camera</Btn>
+          <Btn icon={Upload} variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={!!uploadProgress}>
+            {uploadProgress ? `${uploadProgress.done}/${uploadProgress.total}` : "Upload"}
+          </Btn>
+          <Btn icon={Camera} variant="secondary" onClick={() => cameraInputRef.current?.click()} disabled={!!uploadProgress}>Camera</Btn>
         </div>
-        {(report.photos || []).length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px" }}>
-            {report.photos.map((p, i) => {
-              const updatePhoto = (field, value) => {
-                const updatedPhotos = [...report.photos];
-                updatedPhotos[i] = { ...updatedPhotos[i], [field]: value };
-                update({ photos: updatedPhotos });
-              };
-              const inputStyle = {
-                width: "100%", fontSize: "12px", color: T.navy[700], padding: "4px 6px",
-                border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, outline: "none",
-                background: T.white, fontFamily: T.font, marginBottom: "4px",
-              };
-              return (
-                <div key={p.id} style={{
-                  border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md,
-                  background: T.neutral[50], overflow: "hidden",
-                }}>
-                  {p.url ? (
-                    <img src={p.url} alt={p.title || p.description} style={{ width: "100%", height: "140px", objectFit: "cover", display: "block" }} />
-                  ) : (
-                    <div style={{ height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <Camera size={32} style={{ color: T.neutral[300] }} />
-                    </div>
-                  )}
-                  <div style={{ padding: "10px" }}>
-                    <input
-                      value={p.title || ""}
-                      onChange={e => updatePhoto("title", e.target.value)}
-                      placeholder="Photo title..."
-                      style={{ ...inputStyle, fontWeight: 600 }}
-                    />
-                    <textarea
-                      value={p.description || ""}
-                      onChange={e => updatePhoto("description", e.target.value)}
-                      placeholder="Add description..."
-                      rows={2}
-                      style={{ ...inputStyle, resize: "vertical", minHeight: "48px" }}
-                    />
-                    <button onClick={() => update({ photos: report.photos.filter((_, j) => j !== i) })}
-                      style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400], fontSize: "11px", marginTop: "2px", display: "flex", alignItems: "center", gap: "4px" }}
-                      onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
-                      onMouseLeave={e => { e.currentTarget.style.color = T.neutral[400]; }}
-                    >
-                      <Trash2 size={12} /> Remove
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+        {uploadProgress && (
+          <div style={{ marginBottom: "12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: T.neutral[500], marginBottom: "4px" }}>
+              <span>Uploading photos...</span>
+              <span>{uploadProgress.done} of {uploadProgress.total}</span>
+            </div>
+            <div style={{ height: "6px", background: T.neutral[200], borderRadius: "3px", overflow: "hidden" }}>
+              <div style={{ height: "100%", background: T.orange[500], borderRadius: "3px", transition: "width 0.3s", width: `${(uploadProgress.done / uploadProgress.total) * 100}%` }} />
+            </div>
           </div>
+        )}
+        {(report.photos || []).length > 0 && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+              <span style={{ fontSize: "12px", color: T.neutral[500] }}>
+                {report.photos.length} photo{report.photos.length !== 1 ? "s" : ""} &middot; {report.photos.filter(p => p.starred).length} starred for report
+              </span>
+              <div style={{ display: "flex", gap: "6px" }}>
+                <button onClick={() => update({ photos: report.photos.map(p => ({ ...p, starred: true, includeInWeekly: true })) })}
+                  style={{ fontSize: "11px", fontWeight: 600, color: T.orange[500], background: "transparent", border: "none", cursor: "pointer" }}>
+                  Star All
+                </button>
+                <span style={{ color: T.neutral[300] }}>|</span>
+                <button onClick={() => update({ photos: report.photos.map(p => ({ ...p, starred: false, includeInWeekly: false })) })}
+                  style={{ fontSize: "11px", fontWeight: 600, color: T.neutral[400], background: "transparent", border: "none", cursor: "pointer" }}>
+                  Clear All
+                </button>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px" }}>
+              {report.photos.map((p, i) => {
+                const updatePhoto = (field, value) => {
+                  const updatedPhotos = [...report.photos];
+                  updatedPhotos[i] = { ...updatedPhotos[i], [field]: value };
+                  update({ photos: updatedPhotos });
+                };
+                const toggleStar = () => {
+                  const updatedPhotos = [...report.photos];
+                  const newStarred = !p.starred;
+                  updatedPhotos[i] = { ...updatedPhotos[i], starred: newStarred, includeInWeekly: newStarred };
+                  update({ photos: updatedPhotos });
+                };
+                const inputStyle = {
+                  width: "100%", fontSize: "12px", color: T.navy[700], padding: "4px 6px",
+                  border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, outline: "none",
+                  background: T.white, fontFamily: T.font, marginBottom: "4px",
+                };
+                return (
+                  <div key={p.id} style={{
+                    border: `1.5px solid ${p.starred ? T.orange[500] : T.neutral[200]}`, borderRadius: T.radius.md,
+                    background: T.neutral[50], overflow: "hidden", position: "relative",
+                    transition: "border-color 0.15s",
+                  }}>
+                    {/* Star button overlaying the image */}
+                    <button onClick={toggleStar}
+                      style={{
+                        position: "absolute", top: "6px", right: "6px", zIndex: 2,
+                        width: "32px", height: "32px", borderRadius: "50%",
+                        background: p.starred ? T.orange[500] : "rgba(0,0,0,0.45)",
+                        border: "2px solid white", cursor: "pointer",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        transition: "all 0.15s", boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+                      }}
+                      title={p.starred ? "Remove from report" : "Add to report"}
+                    >
+                      <Star size={16} style={{ color: "white", fill: p.starred ? "white" : "transparent" }} />
+                    </button>
+                    {p.url ? (
+                      <img src={p.url} alt={p.title || p.description} style={{ width: "100%", height: "140px", objectFit: "cover", display: "block" }} />
+                    ) : (
+                      <div style={{ height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Camera size={32} style={{ color: T.neutral[300] }} />
+                      </div>
+                    )}
+                    {p.starred && (
+                      <div style={{ background: T.orange[100], padding: "3px 10px", fontSize: "10px", fontWeight: 700, color: T.orange[600], textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: "4px" }}>
+                        <Star size={10} style={{ fill: T.orange[600] }} /> In Daily &amp; Weekly Report
+                      </div>
+                    )}
+                    <div style={{ padding: "10px" }}>
+                      <input
+                        value={p.title || ""}
+                        onChange={e => updatePhoto("title", e.target.value)}
+                        placeholder="Photo title..."
+                        style={{ ...inputStyle, fontWeight: 600 }}
+                      />
+                      <textarea
+                        value={p.description || ""}
+                        onChange={e => updatePhoto("description", e.target.value)}
+                        placeholder="Add description..."
+                        rows={2}
+                        style={{ ...inputStyle, resize: "vertical", minHeight: "48px" }}
+                      />
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "2px" }}>
+                        <button onClick={() => update({ photos: report.photos.filter((_, j) => j !== i) })}
+                          style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400], fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}
+                          onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = T.neutral[400]; }}
+                        >
+                          <Trash2 size={12} /> Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </Card>
 
@@ -2969,27 +3018,38 @@ function PhotoGallery({ state, dispatch }) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "16px" }}>
           {allPhotos.map((photo, i) => (
-            <Card key={i} padding="0" style={{ overflow: "hidden" }}>
-              <div style={{
-                height: "160px", background: `linear-gradient(135deg, ${T.neutral[200]}, ${T.neutral[100]})`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <Camera size={40} style={{ color: T.neutral[300] }} />
-              </div>
-              <div style={{ padding: "12px 16px" }}>
-                <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[800] }}>{photo.description}</div>
-                <div style={{ fontSize: "12px", color: T.neutral[500], marginTop: "2px" }}>{fmtDate(photo.date)}</div>
-                <div style={{ marginTop: "8px" }}>
-                  <button onClick={() => {}} style={{
-                    padding: "4px 10px", borderRadius: T.radius.sm, fontSize: "11px", fontWeight: 600,
-                    border: `1px solid ${photo.includeInWeekly ? T.green[500] : T.neutral[300]}`,
-                    background: photo.includeInWeekly ? T.green[100] : "transparent",
-                    color: photo.includeInWeekly ? T.green[500] : T.neutral[400],
-                    cursor: "pointer",
-                  }}>
-                    {photo.includeInWeekly ? "In Weekly" : "Add to Weekly"}
-                  </button>
+            <Card key={i} padding="0" style={{ overflow: "hidden", position: "relative" }}>
+              {photo.starred && (
+                <div style={{
+                  position: "absolute", top: "8px", right: "8px", zIndex: 2,
+                  width: "28px", height: "28px", borderRadius: "50%",
+                  background: T.orange[500], border: "2px solid white",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+                }}>
+                  <Star size={14} style={{ color: "white", fill: "white" }} />
                 </div>
+              )}
+              {photo.url ? (
+                <img src={photo.url} alt={photo.title || photo.description || "Photo"} style={{
+                  width: "100%", height: "160px", objectFit: "cover", display: "block",
+                }} />
+              ) : (
+                <div style={{
+                  height: "160px", background: `linear-gradient(135deg, ${T.neutral[200]}, ${T.neutral[100]})`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <Camera size={40} style={{ color: T.neutral[300] }} />
+                </div>
+              )}
+              <div style={{ padding: "12px 16px" }}>
+                <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[800] }}>{photo.title || photo.description}</div>
+                <div style={{ fontSize: "12px", color: T.neutral[500], marginTop: "2px" }}>{fmtDate(photo.date)}</div>
+                {photo.starred && (
+                  <div style={{ marginTop: "6px", fontSize: "11px", fontWeight: 600, color: T.orange[600], display: "flex", alignItems: "center", gap: "4px" }}>
+                    <Star size={11} style={{ fill: T.orange[600] }} /> In Daily &amp; Weekly Report
+                  </div>
+                )}
               </div>
             </Card>
           ))}
