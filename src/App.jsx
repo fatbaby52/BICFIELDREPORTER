@@ -89,6 +89,7 @@ const globalCSS = `
   @keyframes slideIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
 
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
   /* Respect reduced motion preference */
   @media (prefers-reduced-motion: reduce) {
@@ -2109,14 +2110,41 @@ function DailyEntry({ state, dispatch }) {
     </>
   );
 
-  const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N } or null
+  const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N, photos: [{status}] } or null
 
-  const readFileAsDataURL = (file) => new Promise((resolve, reject) => {
+  // Resize & compress an image file using canvas — returns a much smaller JPEG data URL
+  const compressImage = (file, maxDim = 1600, quality = 0.7) => new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => resolve(e.target.result);
     reader.onerror = reject;
-    reader.readAsDataURL(file);
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        // Revoke object URL to free memory
+        URL.revokeObjectURL(img.src);
+        resolve(dataUrl);
+      };
+      // Use object URL instead of base64 to avoid doubling memory
+      const blob = new Blob([reader.result], { type: file.type });
+      img.src = URL.createObjectURL(blob);
+    };
+    reader.readAsArrayBuffer(file);
   });
+
+  // Create a small thumbnail for grid display
+  const makeThumbnail = (file) => compressImage(file, 400, 0.6);
 
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -2125,32 +2153,47 @@ function DailyEntry({ state, dispatch }) {
 
     const baseCount = (report.photos?.length || 0);
     const baseTitle = photoDesc || "";
-    const batchSize = 5; // Process 5 at a time to avoid memory issues
+
+    // Initialize per-photo progress: "pending" → "processing" → "done" / "error"
+    const photoStatuses = files.map(() => "pending");
+    setUploadProgress({ done: 0, total: files.length, photos: [...photoStatuses] });
+
     const allNewPhotos = [];
 
-    if (files.length > 1) setUploadProgress({ done: 0, total: files.length });
-
-    for (let i = 0; i < files.length; i += batchSize) {
-      const batch = files.slice(i, i + batchSize);
-      const batchResults = await Promise.all(batch.map(async (file, batchIdx) => {
-        const globalIdx = i + batchIdx;
-        const dataUrl = await readFileAsDataURL(file);
-        return {
-          id: `ph-${Date.now()}-${globalIdx}`,
-          url: dataUrl,
+    // Process ONE at a time to keep memory low (each image decompresses fully in the canvas)
+    for (let i = 0; i < files.length; i++) {
+      photoStatuses[i] = "processing";
+      setUploadProgress({ done: i, total: files.length, photos: [...photoStatuses] });
+      try {
+        const [url, thumb] = await Promise.all([
+          compressImage(files[i], 1600, 0.7),
+          makeThumbnail(files[i]),
+        ]);
+        allNewPhotos.push({
+          id: `ph-${Date.now()}-${i}`,
+          url,
+          thumb,
           title: files.length === 1
             ? (baseTitle || "Photo " + (baseCount + 1))
-            : (baseTitle ? `${baseTitle} (${globalIdx + 1})` : "Photo " + (baseCount + globalIdx + 1)),
+            : (baseTitle ? `${baseTitle} (${i + 1})` : "Photo " + (baseCount + i + 1)),
           description: "",
           starred: false,
           includeInWeekly: false,
-        };
-      }));
-      allNewPhotos.push(...batchResults);
-      if (files.length > 1) setUploadProgress({ done: allNewPhotos.length, total: files.length });
+        });
+        photoStatuses[i] = "done";
+      } catch (err) {
+        console.error(`Failed to process photo ${i + 1}:`, err);
+        photoStatuses[i] = "error";
+      }
+      setUploadProgress({ done: i + 1, total: files.length, photos: [...photoStatuses] });
+
+      // Yield to the UI thread every 3 photos so the browser stays responsive
+      if ((i + 1) % 3 === 0) await new Promise(r => setTimeout(r, 0));
     }
 
-    update({ photos: [...(report.photos || []), ...allNewPhotos] });
+    if (allNewPhotos.length > 0) {
+      update({ photos: [...(report.photos || []), ...allNewPhotos] });
+    }
     setPhotoDesc("");
     setUploadProgress(null);
   };
@@ -2447,13 +2490,27 @@ function DailyEntry({ state, dispatch }) {
           <Btn icon={Camera} variant="secondary" onClick={() => cameraInputRef.current?.click()} disabled={!!uploadProgress}>Camera</Btn>
         </div>
         {uploadProgress && (
-          <div style={{ marginBottom: "12px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: T.neutral[500], marginBottom: "4px" }}>
-              <span>Uploading photos...</span>
-              <span>{uploadProgress.done} of {uploadProgress.total}</span>
+          <div style={{ marginBottom: "12px", background: T.neutral[50], border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md, padding: "12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: T.neutral[500], marginBottom: "6px" }}>
+              <span>Resizing &amp; compressing photos...</span>
+              <span style={{ fontWeight: 600 }}>{uploadProgress.done} / {uploadProgress.total}</span>
             </div>
-            <div style={{ height: "6px", background: T.neutral[200], borderRadius: "3px", overflow: "hidden" }}>
-              <div style={{ height: "100%", background: T.orange[500], borderRadius: "3px", transition: "width 0.3s", width: `${(uploadProgress.done / uploadProgress.total) * 100}%` }} />
+            <div style={{ height: "8px", background: T.neutral[200], borderRadius: "4px", overflow: "hidden", marginBottom: "8px" }}>
+              <div style={{ height: "100%", background: T.orange[500], borderRadius: "4px", transition: "width 0.3s ease", width: `${(uploadProgress.done / uploadProgress.total) * 100}%` }} />
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+              {uploadProgress.photos.map((status, idx) => (
+                <div key={idx} style={{
+                  width: "18px", height: "18px", borderRadius: "3px", fontSize: "9px", fontWeight: 700,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: status === "done" ? T.green[500] : status === "processing" ? T.orange[400] : status === "error" ? T.red[400] : T.neutral[200],
+                  color: status === "pending" ? T.neutral[400] : "white",
+                  transition: "all 0.2s",
+                  animation: status === "processing" ? "pulse 1s infinite" : "none",
+                }}>
+                  {status === "done" ? "✓" : status === "error" ? "!" : status === "processing" ? "…" : idx + 1}
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -2513,8 +2570,8 @@ function DailyEntry({ state, dispatch }) {
                     >
                       <Star size={16} style={{ color: "white", fill: p.starred ? "white" : "transparent" }} />
                     </button>
-                    {p.url ? (
-                      <img src={p.url} alt={p.title || p.description} style={{ width: "100%", height: "140px", objectFit: "cover", display: "block" }} />
+                    {(p.thumb || p.url) ? (
+                      <img src={p.thumb || p.url} alt={p.title || p.description} style={{ width: "100%", height: "140px", objectFit: "cover", display: "block" }} />
                     ) : (
                       <div style={{ height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <Camera size={32} style={{ color: T.neutral[300] }} />
@@ -2978,8 +3035,8 @@ function WeeklyView({ state, dispatch }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "12px" }}>
             {weekly.selectedPhotos.filter(p => p.selected !== false).map((photo, i) => (
               <div key={photo.id || i} style={{ border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md, overflow: "hidden" }}>
-                {photo.url ? (
-                  <img src={photo.url} alt={photo.description} style={{ width: "100%", height: "120px", objectFit: "cover" }} />
+                {(photo.thumb || photo.url) ? (
+                  <img src={photo.thumb || photo.url} alt={photo.description} style={{ width: "100%", height: "120px", objectFit: "cover" }} />
                 ) : (
                   <div style={{ height: "120px", background: T.neutral[100], display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <Camera size={24} style={{ color: T.neutral[300] }} />
@@ -2997,9 +3054,11 @@ function WeeklyView({ state, dispatch }) {
 
 // ─── Photo Gallery Component ─────────────────────────────────
 function PhotoGallery({ state, dispatch }) {
-  const allPhotos = state.dailyReports.flatMap(r =>
-    (r.photos || []).map(p => ({ ...p, date: r.date, reportId: r.id }))
-  );
+  const allPhotos = state.dailyReports
+    .filter(r => r.projectId === state.activeProjectId)
+    .flatMap(r =>
+      (r.photos || []).map(p => ({ ...p, date: r.date, reportId: r.id }))
+    );
 
   return (
     <div className="fade-in" style={{ maxWidth: "960px" }}>
@@ -3030,8 +3089,8 @@ function PhotoGallery({ state, dispatch }) {
                   <Star size={14} style={{ color: "white", fill: "white" }} />
                 </div>
               )}
-              {photo.url ? (
-                <img src={photo.url} alt={photo.title || photo.description || "Photo"} style={{
+              {(photo.thumb || photo.url) ? (
+                <img src={photo.thumb || photo.url} alt={photo.title || photo.description || "Photo"} style={{
                   width: "100%", height: "160px", objectFit: "cover", display: "block",
                 }} />
               ) : (
@@ -3174,10 +3233,22 @@ export default function App() {
     }).catch(err => console.error("Failed to save to IndexedDB:", err));
   }, [state.projects, state.dailyReports, state.weeklyReports, state.loading]);
 
-  // Watch for project changes and save (online) or queue (offline)
+  // Watch for project changes — detect deletions first, then save updates
   useEffect(() => {
     if (!loadedRef.current || state.loading) return;
     if (prevProjectsRef.current !== null) {
+      // Detect deletions BEFORE updating the ref
+      const deleted = prevProjectsRef.current.filter(p => !state.projects.find(sp => sp.id === p.id));
+      deleted.forEach(async (p) => {
+        if (isOnline()) {
+          deleteProject(p.id).catch(err => console.error("Failed to delete project:", err));
+        } else {
+          await addPendingSync({ type: 'deleteProject', data: p.id });
+          setPendingSyncCount(c => c + 1);
+        }
+      });
+
+      // Then save changed/new projects
       state.projects.forEach(async (p) => {
         const prev = prevProjectsRef.current?.find(pp => pp.id === p.id);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(p)) {
@@ -3230,20 +3301,6 @@ export default function App() {
     }
     prevWeekliesRef.current = state.weeklyReports;
   }, [state.weeklyReports, state.loading]);
-
-  // Handle project deletion (online) or queue (offline)
-  useEffect(() => {
-    if (!loadedRef.current || !prevProjectsRef.current) return;
-    const deleted = prevProjectsRef.current.filter(p => !state.projects.find(sp => sp.id === p.id));
-    deleted.forEach(async (p) => {
-      if (isOnline()) {
-        deleteProject(p.id).catch(err => console.error("Failed to delete project:", err));
-      } else {
-        await addPendingSync({ type: 'deleteProject', data: p.id });
-        setPendingSyncCount(c => c + 1);
-      }
-    });
-  }, [state.projects]);
 
   // Handle daily deletion (online) or queue (offline)
   useEffect(() => {
