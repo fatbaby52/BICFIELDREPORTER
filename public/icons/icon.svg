@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="64" fill="#1a2744"/>
+  <text x="256" y="280" font-family="Georgia, serif" font-size="180" font-weight="bold" fill="#ffffff" text-anchor="middle">BIC</text>
+  <text x="256" y="380" font-family="Georgia, serif" font-size="48" font-style="italic" fill="#e8853a" text-anchor="middle">the Original.</text>
+</svg>

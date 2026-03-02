@@ -1,0 +1,32 @@
+{
+  "name": "BIC Field Reporter",
+  "short_name": "BIC Reporter",
+  "description": "Construction daily and weekly field reports for Blue Iron Corp",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1a2744",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo-blue.png",
+      "sizes": "200x200",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "shortcuts": [
+    {
+      "name": "New Daily Report",
+      "short_name": "New Daily",
+      "url": "/?action=new-daily"
+    }
+  ]
+}

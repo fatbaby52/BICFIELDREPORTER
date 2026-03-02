@@ -1,6 +1,7 @@
 import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } from "react";
 import * as lucide from "lucide-react";
 import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, uploadPhoto, deletePhoto } from './db';
+import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 
 const {
   LayoutDashboard, FolderCog, ClipboardEdit, FileText, CalendarRange,
@@ -9,7 +10,8 @@ const {
   X, AlertTriangle, Clock, Download, Eye, Edit3, Save, ArrowLeft,
   Building2, HardHat, Truck, Wrench, Users, Calendar, MapPin,
   FileSpreadsheet, FileDown, Menu, ChevronLeft, CircleDot, Search,
-  Filter, Tag, TriangleAlert, CheckCircle2, Circle, Loader2, ChevronUp
+  Filter, Tag, TriangleAlert, CheckCircle2, Circle, Loader2, ChevronUp,
+  Wifi, WifiOff, RefreshCw, CloudOff
 } = lucide;
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2962,92 +2964,202 @@ function PhotoGallery({ state, dispatch }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MAIN APP WITH SUPABASE PERSISTENCE
+// MAIN APP WITH SUPABASE PERSISTENCE + OFFLINE SUPPORT
 // ═══════════════════════════════════════════════════════════════
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [saving, setSaving] = useState(false);
+  const [online, setOnline] = useState(isOnline());
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
   const loadedRef = useRef(false);
   const prevProjectsRef = useRef(null);
   const prevDailiesRef = useRef(null);
   const prevWeekliesRef = useRef(null);
 
-  // Load data from Supabase on mount
+  // Initialize offline storage and load data
   useEffect(() => {
     (async () => {
       try {
-        const [projects, dailyReports, weeklyReports] = await Promise.all([
-          loadProjects(),
-          loadDailyReports(),
-          loadWeeklyReports(),
-        ]);
-        dispatch({ type: "LOAD_DATA", projects, dailyReports, weeklyReports });
+        // Initialize IndexedDB
+        await initOfflineStorage();
+
+        // First, try to load from local storage (instant)
+        const localState = await loadAppState();
+        if (localState) {
+          console.log("Loaded from local storage");
+          dispatch({ type: "LOAD_DATA", projects: localState.projects || [], dailyReports: localState.dailyReports || [], weeklyReports: localState.weeklyReports || [] });
+        }
+
+        // Then sync with Supabase if online
+        if (isOnline()) {
+          try {
+            const [projects, dailyReports, weeklyReports] = await Promise.all([
+              loadProjects(),
+              loadDailyReports(),
+              loadWeeklyReports(),
+            ]);
+            dispatch({ type: "LOAD_DATA", projects, dailyReports, weeklyReports });
+            console.log("Synced with Supabase");
+          } catch (err) {
+            console.error("Failed to sync with Supabase, using local data:", err);
+          }
+        } else if (!localState) {
+          // Offline with no local data
+          dispatch({ type: "SET_LOADING", loading: false });
+        }
+
         loadedRef.current = true;
+
+        // Check pending syncs
+        const pending = await getPendingSyncs();
+        setPendingSyncCount(pending.length);
       } catch (err) {
-        console.error("Failed to load data:", err);
+        console.error("Failed to initialize:", err);
         dispatch({ type: "SET_LOADING", loading: false });
         loadedRef.current = true;
       }
     })();
   }, []);
 
-  // Watch for project changes and save
+  // Monitor online/offline status
+  useEffect(() => {
+    const cleanup = onConnectivityChange((isNowOnline) => {
+      setOnline(isNowOnline);
+      if (isNowOnline) {
+        // Trigger sync when coming back online
+        syncPendingChanges();
+      }
+    });
+    return cleanup;
+  }, []);
+
+  // Listen for PWA sync requests
+  useEffect(() => {
+    const handleSyncRequest = () => syncPendingChanges();
+    window.addEventListener('pwa-sync-requested', handleSyncRequest);
+    return () => window.removeEventListener('pwa-sync-requested', handleSyncRequest);
+  }, []);
+
+  // Sync pending changes to Supabase
+  const syncPendingChanges = async () => {
+    if (!isOnline() || syncing) return;
+    setSyncing(true);
+    try {
+      const pending = await getPendingSyncs();
+      for (const item of pending) {
+        try {
+          if (item.type === 'saveProject') await saveProject(item.data);
+          else if (item.type === 'saveDailyReport') await saveDailyReport(item.data);
+          else if (item.type === 'saveWeeklyReport') await saveWeeklyReport(item.data);
+          else if (item.type === 'deleteProject') await deleteProject(item.data);
+          else if (item.type === 'deleteDailyReport') await deleteDailyReport(item.data);
+        } catch (err) {
+          console.error("Failed to sync item:", item, err);
+        }
+      }
+      await clearPendingSyncs();
+      setPendingSyncCount(0);
+      console.log("Sync complete");
+    } catch (err) {
+      console.error("Sync failed:", err);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Save state to IndexedDB whenever it changes
+  useEffect(() => {
+    if (!loadedRef.current || state.loading) return;
+    saveAppState({
+      projects: state.projects,
+      dailyReports: state.dailyReports,
+      weeklyReports: state.weeklyReports,
+    }).catch(err => console.error("Failed to save to IndexedDB:", err));
+  }, [state.projects, state.dailyReports, state.weeklyReports, state.loading]);
+
+  // Watch for project changes and save (online) or queue (offline)
   useEffect(() => {
     if (!loadedRef.current || state.loading) return;
     if (prevProjectsRef.current !== null) {
-      state.projects.forEach(p => {
+      state.projects.forEach(async (p) => {
         const prev = prevProjectsRef.current?.find(pp => pp.id === p.id);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(p)) {
-          saveProject(p).catch(err => console.error("Failed to save project:", err));
+          if (isOnline()) {
+            saveProject(p).catch(err => console.error("Failed to save project:", err));
+          } else {
+            await addPendingSync({ type: 'saveProject', data: p });
+            setPendingSyncCount(c => c + 1);
+          }
         }
       });
     }
     prevProjectsRef.current = state.projects;
   }, [state.projects, state.loading]);
 
-  // Watch for daily report changes and save
+  // Watch for daily report changes and save (online) or queue (offline)
   useEffect(() => {
     if (!loadedRef.current || state.loading) return;
     if (prevDailiesRef.current !== null) {
-      state.dailyReports.forEach(r => {
+      state.dailyReports.forEach(async (r) => {
         const prev = prevDailiesRef.current?.find(pr => pr.id === r.id);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(r)) {
-          saveDailyReport(r).catch(err => console.error("Failed to save daily report:", err));
+          if (isOnline()) {
+            saveDailyReport(r).catch(err => console.error("Failed to save daily report:", err));
+          } else {
+            await addPendingSync({ type: 'saveDailyReport', data: r });
+            setPendingSyncCount(c => c + 1);
+          }
         }
       });
     }
     prevDailiesRef.current = state.dailyReports;
   }, [state.dailyReports, state.loading]);
 
-  // Watch for weekly report changes and save
+  // Watch for weekly report changes and save (online) or queue (offline)
   useEffect(() => {
     if (!loadedRef.current || state.loading) return;
     if (prevWeekliesRef.current !== null) {
-      state.weeklyReports.forEach(r => {
+      state.weeklyReports.forEach(async (r) => {
         const prev = prevWeekliesRef.current?.find(pr => pr.id === r.id);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(r)) {
-          saveWeeklyReport(r).catch(err => console.error("Failed to save weekly report:", err));
+          if (isOnline()) {
+            saveWeeklyReport(r).catch(err => console.error("Failed to save weekly report:", err));
+          } else {
+            await addPendingSync({ type: 'saveWeeklyReport', data: r });
+            setPendingSyncCount(c => c + 1);
+          }
         }
       });
     }
     prevWeekliesRef.current = state.weeklyReports;
   }, [state.weeklyReports, state.loading]);
 
-  // Handle project deletion
+  // Handle project deletion (online) or queue (offline)
   useEffect(() => {
     if (!loadedRef.current || !prevProjectsRef.current) return;
     const deleted = prevProjectsRef.current.filter(p => !state.projects.find(sp => sp.id === p.id));
-    deleted.forEach(p => {
-      deleteProject(p.id).catch(err => console.error("Failed to delete project:", err));
+    deleted.forEach(async (p) => {
+      if (isOnline()) {
+        deleteProject(p.id).catch(err => console.error("Failed to delete project:", err));
+      } else {
+        await addPendingSync({ type: 'deleteProject', data: p.id });
+        setPendingSyncCount(c => c + 1);
+      }
     });
   }, [state.projects]);
 
-  // Handle daily deletion
+  // Handle daily deletion (online) or queue (offline)
   useEffect(() => {
     if (!loadedRef.current || !prevDailiesRef.current) return;
     const deleted = prevDailiesRef.current.filter(r => !state.dailyReports.find(sr => sr.id === r.id));
-    deleted.forEach(r => {
-      deleteDailyReport(r.id).catch(err => console.error("Failed to delete daily report:", err));
+    deleted.forEach(async (r) => {
+      if (isOnline()) {
+        deleteDailyReport(r.id).catch(err => console.error("Failed to delete daily report:", err));
+      } else {
+        await addPendingSync({ type: 'deleteDailyReport', data: r.id });
+        setPendingSyncCount(c => c + 1);
+      }
     });
   }, [state.dailyReports]);
 
@@ -3070,6 +3182,44 @@ export default function App() {
       <style>{globalCSS}</style>
       <a href="#main-content" className="skip-link">Skip to main content</a>
       <div style={{ minHeight: "100vh", background: T.neutral[50] }}>
+        {/* Offline/Sync Status Bar */}
+        {(!online || pendingSyncCount > 0) && (
+          <div style={{
+            position: "fixed", bottom: 0, left: 0, right: 0,
+            background: online ? T.orange[500] : T.navy[800],
+            color: T.white, padding: "10px 20px",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: "12px",
+            zIndex: 1001, fontSize: "13px", fontWeight: 600,
+          }}>
+            {!online ? (
+              <>
+                <WifiOff size={18} />
+                <span>You're offline — changes saved locally</span>
+                {pendingSyncCount > 0 && <span style={{ background: T.orange[500], padding: "2px 8px", borderRadius: "10px", fontSize: "11px" }}>{pendingSyncCount} pending</span>}
+              </>
+            ) : pendingSyncCount > 0 ? (
+              <>
+                {syncing ? (
+                  <>
+                    <RefreshCw size={18} style={{ animation: "spin 1s linear infinite" }} />
+                    <span>Syncing {pendingSyncCount} changes...</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudOff size={18} />
+                    <span>{pendingSyncCount} changes waiting to sync</span>
+                    <button onClick={syncPendingChanges} style={{
+                      background: T.white, color: T.orange[600], border: "none",
+                      padding: "4px 12px", borderRadius: "4px", cursor: "pointer",
+                      fontWeight: 600, fontSize: "12px",
+                    }}>Sync Now</button>
+                  </>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
+
         {state.loading && (
           <div style={{
             position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
@@ -3087,7 +3237,7 @@ export default function App() {
         )}
         <Sidebar currentView={state.currentView} dispatch={dispatch} projects={state.projects} activeProjectId={state.activeProjectId} />
         <MobileNav currentView={state.currentView} dispatch={dispatch} projects={state.projects} activeProjectId={state.activeProjectId} />
-        <main id="main-content" className="main-content" style={{ marginLeft: "220px", padding: "32px", minHeight: "100vh" }} role="main">
+        <main id="main-content" className="main-content" style={{ marginLeft: "220px", padding: "32px", minHeight: "100vh", paddingBottom: (!online || pendingSyncCount > 0) ? "80px" : "32px" }} role="main">
           {renderView()}
         </main>
       </div>
