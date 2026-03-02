@@ -2126,9 +2126,42 @@ function DailyEntry({ state, dispatch }) {
     reader.readAsDataURL(file);
   };
 
+  const addMultiplePhotos = (files) => {
+    if (!files || files.length === 0) return;
+    const baseCount = (report.photos?.length || 0);
+    const baseTitle = photoDesc || "";
+    let loaded = 0;
+    const newPhotos = [];
+    files.forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        newPhotos[i] = {
+          id: `ph-${Date.now()}-${i}`,
+          url: e.target.result,
+          title: files.length === 1
+            ? (baseTitle || "Photo " + (baseCount + 1))
+            : (baseTitle ? `${baseTitle} (${i + 1})` : "Photo " + (baseCount + i + 1)),
+          description: "",
+          includeInWeekly: false
+        };
+        loaded++;
+        if (loaded === files.length) {
+          update({ photos: [...(report.photos || []), ...newPhotos.filter(Boolean)] });
+          setPhotoDesc("");
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleFileSelect = (e) => {
-    const file = e.target.files?.[0];
-    if (file) addPhoto(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    if (files.length === 1) {
+      addPhoto(files[0]);
+    } else {
+      addMultiplePhotos(files);
+    }
     e.target.value = "";
   };
 
@@ -2414,7 +2447,7 @@ function DailyEntry({ state, dispatch }) {
 
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={Camera}>Progress Photos</SectionTitle>
-        <input type="file" accept="image/*" ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
+        <input type="file" accept="image/*" multiple ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
         <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
           <Input placeholder="Photo title (optional)..." value={photoDesc} onChange={e => setPhotoDesc(e.target.value)} style={{ flex: 1 }} />
