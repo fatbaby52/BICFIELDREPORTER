@@ -546,7 +546,7 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
   .footer strong{color:#1a2744}
   .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px}
   .photo-card{border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
-  .photo-card img{width:100%;height:200px;object-fit:cover;display:block}
+  .photo-card img{width:100%;height:auto;display:block}
   .photo-card-caption{padding:12px 16px;background:#fff;font-size:12px;color:#1a2744;font-weight:500}
   @media print{
     *,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
@@ -634,8 +634,11 @@ ${includePhotos && (report.photos || []).length > 0 ? `
   <div class="section-title">Progress Photos</div>
   <div class="photo-grid">
     ${report.photos.map(p => `<div class="photo-card">
-      <img src="${p.url}" alt="${p.description}">
-      <div class="photo-card-caption">${p.description}</div>
+      <img src="${p.url}" alt="${p.title || p.description}">
+      <div class="photo-card-caption">
+        ${p.title ? `<strong>${p.title}</strong>` : ""}
+        ${p.description ? `<div style="font-weight:normal;color:#6b7280;margin-top:4px">${p.description}</div>` : ""}
+      </div>
     </div>`).join("")}
   </div>
 </div>` : ""}
@@ -2108,7 +2111,8 @@ function DailyEntry({ state, dispatch }) {
       const newPhoto = {
         id: `ph-${Date.now()}`,
         url: e.target.result,
-        description: photoDesc || file.name || "Progress photo",
+        title: photoDesc || "Photo " + ((report.photos?.length || 0) + 1),
+        description: "",
         includeInWeekly: false
       };
       update({ photos: [...(report.photos || []), newPhoto] });
@@ -2408,51 +2412,60 @@ function DailyEntry({ state, dispatch }) {
         <input type="file" accept="image/*" ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
         <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
         <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
-          <Input placeholder="Photo description (optional)..." value={photoDesc} onChange={e => setPhotoDesc(e.target.value)} style={{ flex: 1 }} />
+          <Input placeholder="Photo title (optional)..." value={photoDesc} onChange={e => setPhotoDesc(e.target.value)} style={{ flex: 1 }} />
           <Btn icon={Upload} variant="secondary" onClick={() => fileInputRef.current?.click()}>Upload</Btn>
           <Btn icon={Camera} variant="secondary" onClick={() => cameraInputRef.current?.click()}>Camera</Btn>
         </div>
         {(report.photos || []).length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "12px" }}>
-            {report.photos.map((p, i) => (
-              <div key={p.id} style={{
-                border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md,
-                background: T.neutral[50], overflow: "hidden",
-              }}>
-                {p.url ? (
-                  <img src={p.url} alt={p.description} style={{ width: "100%", height: "120px", objectFit: "cover", display: "block" }} />
-                ) : (
-                  <div style={{ height: "120px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <Camera size={32} style={{ color: T.neutral[300] }} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px" }}>
+            {report.photos.map((p, i) => {
+              const updatePhoto = (field, value) => {
+                const updatedPhotos = [...report.photos];
+                updatedPhotos[i] = { ...updatedPhotos[i], [field]: value };
+                update({ photos: updatedPhotos });
+              };
+              const inputStyle = {
+                width: "100%", fontSize: "12px", color: T.navy[700], padding: "4px 6px",
+                border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, outline: "none",
+                background: T.white, fontFamily: T.font, marginBottom: "4px",
+              };
+              return (
+                <div key={p.id} style={{
+                  border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md,
+                  background: T.neutral[50], overflow: "hidden",
+                }}>
+                  {p.url ? (
+                    <img src={p.url} alt={p.title || p.description} style={{ width: "100%", height: "140px", objectFit: "cover", display: "block" }} />
+                  ) : (
+                    <div style={{ height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Camera size={32} style={{ color: T.neutral[300] }} />
+                    </div>
+                  )}
+                  <div style={{ padding: "10px" }}>
+                    <input
+                      value={p.title || ""}
+                      onChange={e => updatePhoto("title", e.target.value)}
+                      placeholder="Photo title..."
+                      style={{ ...inputStyle, fontWeight: 600 }}
+                    />
+                    <textarea
+                      value={p.description || ""}
+                      onChange={e => updatePhoto("description", e.target.value)}
+                      placeholder="Add description..."
+                      rows={2}
+                      style={{ ...inputStyle, resize: "vertical", minHeight: "48px" }}
+                    />
+                    <button onClick={() => update({ photos: report.photos.filter((_, j) => j !== i) })}
+                      style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400], fontSize: "11px", marginTop: "2px", display: "flex", alignItems: "center", gap: "4px" }}
+                      onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = T.neutral[400]; }}
+                    >
+                      <Trash2 size={12} /> Remove
+                    </button>
                   </div>
-                )}
-                <div style={{ padding: "8px" }}>
-                  <input
-                    value={p.description}
-                    onChange={e => {
-                      const updatedPhotos = [...report.photos];
-                      updatedPhotos[i] = { ...updatedPhotos[i], description: e.target.value };
-                      update({ photos: updatedPhotos });
-                    }}
-                    placeholder="Add description..."
-                    style={{
-                      width: "100%", fontSize: "12px", color: T.navy[700], padding: "4px 6px",
-                      border: `1px solid transparent`, borderRadius: T.radius.sm, outline: "none",
-                      background: "transparent", fontFamily: T.font,
-                    }}
-                    onFocus={e => { e.target.style.borderColor = T.neutral[200]; e.target.style.background = T.white; }}
-                    onBlur={e => { e.target.style.borderColor = "transparent"; e.target.style.background = "transparent"; }}
-                  />
-                  <button onClick={() => update({ photos: report.photos.filter((_, j) => j !== i) })}
-                    style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400], fontSize: "11px", marginTop: "4px", display: "flex", alignItems: "center", gap: "4px" }}
-                    onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = T.neutral[400]; }}
-                  >
-                    <Trash2 size={12} /> Remove
-                  </button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
