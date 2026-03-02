@@ -453,8 +453,7 @@ const exportDailyExcel = (report, project) => {
   const present = allEquip.filter(e => report.equipmentPresent.includes(e.id));
   const roles = ["Indirect Labor","Apprentices","Foreman","Operators","Laborers","Carpenters","Cement Masons"];
   const roleKeys = ["indirectLabor","apprentices","foreman","operators","laborers","carpenters","cementMasons"];
-  const totalDay = roleKeys.reduce((s, k) => s + (report.workforce[k]?.day || 0), 0);
-  const totalNight = roleKeys.reduce((s, k) => s + (report.workforce[k]?.night || 0), 0);
+  const totalHours = roleKeys.reduce((s, k) => s + (report.workforce[k]?.hours || 0), 0);
 
   let csv = "";
   const row = (...cells) => { csv += cells.map(c => `"${String(c || "").replace(/"/g, '""')}"`).join(",") + "\n"; };
@@ -463,14 +462,15 @@ const exportDailyExcel = (report, project) => {
   row("Date", fmtDate(report.date), "", "JOB #", project.jobNumber);
   row("Day", report.day, "", "Title", "Daily Report");
   row("Weather", report.weather, "", "Job Name", project.jobName);
+  row("Temperature", report.temperature || "—", "", "Rainfall (in)", report.rainfall || "—");
   row("Incidents", report.incidents);
   row("Shift", `${report.shift.hours} ${report.shift.type}`); row("");
   row("GENERAL NOTES");
   row(report.generalNotes); row("");
-  row("DAILY WORKFORCE");
-  row("Role", "Day", "Night");
-  roleKeys.forEach((k, i) => row(roles[i], report.workforce[k]?.day || 0, report.workforce[k]?.night || 0));
-  row("Total", totalDay, totalNight); row("");
+  row("DAILY WORKFORCE (HOURS)");
+  row("Role", "Hours");
+  roleKeys.forEach((k, i) => row(roles[i], report.workforce[k]?.hours || 0));
+  row("Total Hours", totalHours); row("");
   row("MAJOR EQUIPMENT");
   row("Description", "Type", "Vendor", "Status");
   present.forEach(e => row(e.description, e.type, e.vendor || "", report.equipmentDown.includes(e.id) ? "DOWN" : "OK"));
@@ -497,8 +497,7 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
   const present = allEquip.filter(e => report.equipmentPresent.includes(e.id));
   const roles = ["Indirect Labor","Apprentices","Foreman","Operators","Laborers","Carpenters","Cement Masons"];
   const roleKeys = ["indirectLabor","apprentices","foreman","operators","laborers","carpenters","cementMasons"];
-  const totalDay = roleKeys.reduce((s, k) => s + (report.workforce[k]?.day || 0), 0);
-  const totalNight = roleKeys.reduce((s, k) => s + (report.workforce[k]?.night || 0), 0);
+  const totalHours = roleKeys.reduce((s, k) => s + (report.workforce[k]?.hours || 0), 0);
 
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Daily Report ${report.date}</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -581,7 +580,8 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
     <div class="date-box">
       <div style="font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Report Date</div>
       <div class="date">${fmtDateShort(report.date)}</div>
-      <div class="meta" style="margin-top:8px">${report.day} · ${report.weather}</div>
+      <div class="meta" style="margin-top:8px">${report.day} · ${report.weather}${report.temperature ? ` · ${report.temperature}` : ""}</div>
+      ${report.rainfall ? `<div class="meta">Rainfall: ${report.rainfall} in</div>` : ""}
       <div class="meta">Shift: ${report.shift.hours} ${report.shift.type}</div>
       <div class="meta">Incidents: ${report.incidents || "None"}</div>
     </div>
@@ -595,11 +595,11 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
 
 <div class="grid">
   <div class="section">
-    <div class="section-title">Daily Workforce</div>
+    <div class="section-title">Daily Workforce (Hours)</div>
     <table>
-      <tr><th scope="col">Role</th><th scope="col" style="text-align:center">Day</th><th scope="col" style="text-align:center">Night</th></tr>
-      ${roleKeys.map((k, i) => `<tr><td>${roles[i]}</td><td style="text-align:center">${report.workforce[k]?.day || "—"}</td><td style="text-align:center">${report.workforce[k]?.night || "—"}</td></tr>`).join("")}
-      <tr class="total-row"><td>Total</td><td style="text-align:center">${totalDay}</td><td style="text-align:center">${totalNight}</td></tr>
+      <tr><th scope="col">Role</th><th scope="col" style="text-align:center">Hours</th></tr>
+      ${roleKeys.map((k, i) => `<tr><td>${roles[i]}</td><td style="text-align:center">${report.workforce[k]?.hours || "—"}</td></tr>`).join("")}
+      <tr class="total-row"><td>Total Hours</td><td style="text-align:center">${totalHours}</td></tr>
     </table>
   </div>
   <div class="section">
@@ -1083,8 +1083,8 @@ function reducer(state, action) {
       const today = new Date();
       const newReport = {
         id: `dr-${Date.now()}`, projectId: project.id, date: toISODate(today), day: DAYS[today.getDay()],
-        weather: "Sunny / Clear", incidents: "N/A", shift: { type: "Day", hours: "8hr" },
-        generalNotes: "", workforce: { foreman: { day: 0, night: 0 }, operators: { day: 0, night: 0 }, laborers: { day: 0, night: 0 }, apprentices: { day: 0, night: 0 }, carpenters: { day: 0, night: 0 }, cementMasons: { day: 0, night: 0 }, indirectLabor: { day: 0, night: 0 } },
+        weather: "Sunny / Clear", temperature: "", rainfall: "", incidents: "N/A", shift: { type: "Day", hours: "8hr" },
+        generalNotes: "", workforce: { foreman: { hours: 0 }, operators: { hours: 0 }, laborers: { hours: 0 }, apprentices: { hours: 0 }, carpenters: { hours: 0 }, cementMasons: { hours: 0 }, indirectLabor: { hours: 0 } },
         equipmentPresent: [...project.equipmentOwned.map(e => e.id), ...project.equipmentRented.map(e => e.id)],
         equipmentDown: [], thirdPartyUtilities: "", materialDeliveries: "",
         delaysProblems: "", extraWork: "", milestoneHit: null, photos: [], preparedBy: project.preparedBy || "",
@@ -1536,6 +1536,8 @@ function ProjectAI({ state, project }) {
         .map(r => ({
           date: r.date,
           weather: r.weather,
+          temperature: r.temperature,
+          rainfall: r.rainfall,
           shift: r.shift,
           generalNotes: r.generalNotes ? r.generalNotes.substring(0, 500) : "",
           incidents: r.incidents,
@@ -1957,8 +1959,8 @@ function DailyEntry({ state, dispatch }) {
   }
 
   const update = (data) => dispatch({ type: "UPDATE_EDITING_DAILY", data });
-  const updateWorkforce = (role, shift, val) => {
-    update({ workforce: { ...report.workforce, [role]: { ...report.workforce[role], [shift]: parseInt(val) || 0 } } });
+  const updateWorkforce = (role, val) => {
+    update({ workforce: { ...report.workforce, [role]: { hours: parseFloat(val) || 0 } } });
   };
 
   const toggleEquipment = (id) => {
@@ -2111,8 +2113,7 @@ function DailyEntry({ state, dispatch }) {
     { key: "cementMasons", label: "Cement Masons" },
   ];
 
-  const totalDay = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.day || 0), 0);
-  const totalNight = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.night || 0), 0);
+  const totalHours = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.hours || 0), 0);
 
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
@@ -2149,6 +2150,10 @@ function DailyEntry({ state, dispatch }) {
           />
           <Input label="Incidents" value={report.incidents} onChange={e => update({ incidents: e.target.value })} placeholder="N/A" />
         </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "16px", marginTop: "16px" }}>
+          <Input label="Temperature" value={report.temperature || ""} onChange={e => update({ temperature: e.target.value })} placeholder="e.g. 72°F" />
+          <Input label="Rainfall (in)" value={report.rainfall || ""} onChange={e => update({ rainfall: e.target.value })} placeholder="e.g. 0.25" />
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "16px" }}>
           <Select label="Shift" value={report.shift.type} onChange={e => update({ shift: { ...report.shift, type: e.target.value } })}
             options={[{ value: "Day", label: "Day" }, { value: "Night", label: "Night" }, { value: "Day + Night", label: "Day + Night" }]}
@@ -2167,13 +2172,12 @@ function DailyEntry({ state, dispatch }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card>
-          <SectionTitle icon={Users}>Daily Workforce</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", fontSize: "12px", fontWeight: 600, color: T.neutral[500], marginBottom: "6px" }}>
-            <span>Role</span><span style={{ textAlign: "center" }}>Day</span><span style={{ textAlign: "center" }}>Night</span>
+          <SectionTitle icon={Users}>Daily Workforce (Hours)</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "4px", fontSize: "12px", fontWeight: 600, color: T.neutral[500], marginBottom: "6px" }}>
+            <span>Role</span><span style={{ textAlign: "center" }}>Hours</span>
           </div>
           {workforceRoles.map(r => {
-            const dayVal = report.workforce[r.key]?.day || 0;
-            const nightVal = report.workforce[r.key]?.night || 0;
+            const hoursVal = report.workforce[r.key]?.hours || 0;
             const stepperBtn = (onClick, icon) => (
               <button onClick={onClick} style={{
                 width: "28px", height: "28px", border: "none", borderRadius: "6px",
@@ -2186,31 +2190,22 @@ function DailyEntry({ state, dispatch }) {
               >{icon}</button>
             );
             return (
-              <div key={r.key} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", marginBottom: "4px", alignItems: "center" }}>
+              <div key={r.key} style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "4px", marginBottom: "4px", alignItems: "center" }}>
                 <span style={{ fontSize: "13px", color: T.navy[700] }}>{r.label}</span>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }}>
-                  {stepperBtn(() => updateWorkforce(r.key, "day", Math.max(0, dayVal - 1)), <ChevronDown size={14} />)}
+                  {stepperBtn(() => updateWorkforce(r.key, Math.max(0, hoursVal - 1)), <ChevronDown size={14} />)}
                   <span style={{
-                    minWidth: "28px", textAlign: "center", fontSize: "14px", fontWeight: 700,
-                    color: dayVal > 0 ? T.navy[800] : T.neutral[300],
-                  }}>{dayVal}</span>
-                  {stepperBtn(() => updateWorkforce(r.key, "day", dayVal + 1), <ChevronUp size={14} />)}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }}>
-                  {stepperBtn(() => updateWorkforce(r.key, "night", Math.max(0, nightVal - 1)), <ChevronDown size={14} />)}
-                  <span style={{
-                    minWidth: "28px", textAlign: "center", fontSize: "14px", fontWeight: 700,
-                    color: nightVal > 0 ? T.navy[800] : T.neutral[300],
-                  }}>{nightVal}</span>
-                  {stepperBtn(() => updateWorkforce(r.key, "night", nightVal + 1), <ChevronUp size={14} />)}
+                    minWidth: "36px", textAlign: "center", fontSize: "14px", fontWeight: 700,
+                    color: hoursVal > 0 ? T.navy[800] : T.neutral[300],
+                  }}>{hoursVal}</span>
+                  {stepperBtn(() => updateWorkforce(r.key, hoursVal + 1), <ChevronUp size={14} />)}
                 </div>
               </div>
             );
           })}
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", marginTop: "8px", paddingTop: "8px", borderTop: `2px solid ${T.navy[800]}` }}>
-            <span style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800] }}>Total</span>
-            <span style={{ textAlign: "center", fontWeight: 700, fontSize: "14px", color: T.orange[500] }}>{totalDay}</span>
-            <span style={{ textAlign: "center", fontWeight: 700, fontSize: "14px", color: T.orange[500] }}>{totalNight}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "4px", marginTop: "8px", paddingTop: "8px", borderTop: `2px solid ${T.navy[800]}` }}>
+            <span style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800] }}>Total Hours</span>
+            <span style={{ textAlign: "center", fontWeight: 700, fontSize: "14px", color: T.orange[500] }}>{totalHours}</span>
           </div>
         </Card>
 
@@ -2458,8 +2453,7 @@ function DailyView({ state, dispatch }) {
     { key: "laborers", label: "Laborers" }, { key: "carpenters", label: "Carpenters" },
     { key: "cementMasons", label: "Cement Masons" },
   ];
-  const totalDay = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.day || 0), 0);
-  const totalNight = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.night || 0), 0);
+  const totalHours = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.hours || 0), 0);
 
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
@@ -2488,7 +2482,9 @@ function DailyView({ state, dispatch }) {
             <div style={{ display: "flex", alignItems: "center", gap: "8px", justifyContent: "flex-end" }}>
               <WeatherIcon weather={report.weather} />
               <span style={{ fontWeight: 600 }}>{report.weather}</span>
+              {report.temperature && <span style={{ fontSize: "13px", color: T.navy[300] }}>· {report.temperature}</span>}
             </div>
+            {report.rainfall && <div style={{ fontSize: "13px", color: T.navy[400] }}>Rainfall: {report.rainfall} in</div>}
             <div style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>{fmtDate(report.date)}</div>
             <div style={{ fontSize: "13px", color: T.navy[400] }}>Shift: {report.shift.hours} {report.shift.type}</div>
           </div>
@@ -2502,27 +2498,24 @@ function DailyView({ state, dispatch }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card padding="0" style={{ overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", background: T.navy[800], color: T.white, fontWeight: 700, fontSize: "13px" }}>Daily Workforce</div>
+          <div style={{ padding: "12px 16px", background: T.navy[800], color: T.white, fontWeight: 700, fontSize: "13px" }}>Daily Workforce (Hours)</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
             <thead>
               <tr style={{ borderBottom: `2px solid ${T.neutral[200]}` }}>
                 <th scope="col" style={{ padding: "8px 12px", textAlign: "left", color: T.neutral[500], fontWeight: 600 }}>Role</th>
-                <th scope="col" style={{ padding: "8px 12px", textAlign: "center", color: T.neutral[500], fontWeight: 600 }}>D</th>
-                <th scope="col" style={{ padding: "8px 12px", textAlign: "center", color: T.neutral[500], fontWeight: 600 }}>N</th>
+                <th scope="col" style={{ padding: "8px 12px", textAlign: "center", color: T.neutral[500], fontWeight: 600 }}>Hours</th>
               </tr>
             </thead>
             <tbody>
               {workforceRoles.map((r, i) => (
                 <tr key={r.key} style={{ borderBottom: `1px solid ${T.neutral[100]}` }}>
                   <td style={{ padding: "7px 12px" }}>{r.label}</td>
-                  <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{report.workforce[r.key]?.day || "—"}</td>
-                  <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{report.workforce[r.key]?.night || "—"}</td>
+                  <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{report.workforce[r.key]?.hours || "—"}</td>
                 </tr>
               ))}
               <tr style={{ borderTop: `2px solid ${T.navy[800]}` }}>
-                <td style={{ padding: "8px 12px", fontWeight: 700 }}>Total</td>
-                <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: T.orange[500] }}>{totalDay}</td>
-                <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: T.orange[500] }}>{totalNight}</td>
+                <td style={{ padding: "8px 12px", fontWeight: 700 }}>Total Hours</td>
+                <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700, color: T.orange[500] }}>{totalHours}</td>
               </tr>
             </tbody>
           </table>

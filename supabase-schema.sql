@@ -24,6 +24,8 @@ CREATE TABLE daily_reports (
   date DATE NOT NULL,
   day TEXT DEFAULT '',
   weather TEXT DEFAULT '',
+  temperature TEXT DEFAULT '',
+  rainfall TEXT DEFAULT '',
   incidents TEXT DEFAULT 'N/A',
   shift JSONB DEFAULT '{"type":"Day","hours":"8hr"}'::jsonb,
   general_notes TEXT DEFAULT '',
