@@ -1,6 +1,6 @@
 import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } from "react";
 import * as lucide from "lucide-react";
-import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, uploadPhoto, deletePhoto } from './db';
+import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 import SafetyMeetings from './SafetyMeetings';
 import heic2any from 'heic2any';
@@ -1154,6 +1154,7 @@ function reducer(state, action) {
       return { ...state, weeklyReports: reports, currentView: "dashboard", editingWeekly: null };
     }
     case "UPDATE_EDITING_WEEKLY": return { ...state, editingWeekly: { ...state.editingWeekly, ...action.data } };
+    case "DELETE_WEEKLY": return { ...state, weeklyReports: state.weeklyReports.filter(r => r.id !== action.id) };
     default: return state;
   }
 }
@@ -1675,8 +1676,19 @@ function Dashboard({ state, dispatch }) {
     return we === currentWE;
   });
 
+  // Collect all available weeks from daily reports
+  const availableWeeks = useMemo(() => {
+    const weekSet = new Set();
+    projectDailies.forEach(r => weekSet.add(getWeekEnding(r.date)));
+    // Also include current week even if no dailies yet
+    weekSet.add(getWeekEnding(new Date()));
+    return [...weekSet].sort().reverse(); // Most recent first
+  }, [projectDailies]);
+
+  const [selectedWeek, setSelectedWeek] = useState(() => getWeekEnding(new Date()));
+
   const generateWeekly = () => {
-    const weekEnding = getWeekEnding(new Date());
+    const weekEnding = selectedWeek;
     const weekReports = projectDailies.filter(r => getWeekEnding(r.date) === weekEnding);
     const agg = aggregateWeeklyData(weekReports, project);
 
@@ -1692,6 +1704,8 @@ function Dashboard({ state, dispatch }) {
       selectedPhotos: agg.allPhotos,
     }});
   };
+
+  const selectedWeekReports = projectDailies.filter(r => getWeekEnding(r.date) === selectedWeek);
 
   return (
     <div className="fade-in" style={{ maxWidth: "960px" }}>
@@ -1734,22 +1748,33 @@ function Dashboard({ state, dispatch }) {
           </div>
         </button>
 
-        <button onClick={generateWeekly} style={{
+        <div style={{
           display: "flex", alignItems: "center", gap: "12px", padding: "16px 20px",
           background: T.white, border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.lg,
-          cursor: "pointer", transition: "all 0.2s",
-        }}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = T.navy[600]; }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = T.neutral[200]; }}
-        >
-          <div style={{ width: "40px", height: "40px", borderRadius: T.radius.md, background: T.navy[800], display: "flex", alignItems: "center", justifyContent: "center" }}>
+        }}>
+          <div style={{ width: "40px", height: "40px", borderRadius: T.radius.md, background: T.navy[800], display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <CalendarRange size={20} style={{ color: T.white }} />
           </div>
-          <div style={{ textAlign: "left" }}>
-            <div style={{ fontWeight: 700, fontSize: "14px", color: T.navy[800] }}>Generate Weekly</div>
-            <div style={{ fontSize: "12px", color: T.neutral[500] }}>From this week's dailies</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: "14px", color: T.navy[800], marginBottom: "6px" }}>Generate Weekly</div>
+            <select value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)}
+              style={{ width: "100%", padding: "5px 8px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", color: T.navy[700], background: T.white, cursor: "pointer" }}>
+              {availableWeeks.map(we => {
+                const count = projectDailies.filter(r => getWeekEnding(r.date) === we).length;
+                return <option key={we} value={we}>Week ending {fmtDateShort(we)} ({count} {count === 1 ? "daily" : "dailies"})</option>;
+              })}
+            </select>
+            <button onClick={generateWeekly} disabled={selectedWeekReports.length === 0}
+              style={{
+                marginTop: "6px", width: "100%", padding: "6px", border: "none", borderRadius: T.radius.sm,
+                background: selectedWeekReports.length > 0 ? T.navy[800] : T.neutral[200],
+                color: selectedWeekReports.length > 0 ? T.white : T.neutral[400],
+                fontSize: "12px", fontWeight: 600, cursor: selectedWeekReports.length > 0 ? "pointer" : "default",
+              }}>
+              Generate from {selectedWeekReports.length} {selectedWeekReports.length === 1 ? "daily" : "dailies"}
+            </button>
           </div>
-        </button>
+        </div>
 
         <button onClick={() => dispatch({ type: "SET_VIEW", view: "photos" })} style={{
           display: "flex", alignItems: "center", gap: "12px", padding: "16px 20px",
@@ -1824,7 +1849,17 @@ function Dashboard({ state, dispatch }) {
                       <div style={{ fontSize: "12px", color: T.neutral[500] }}>{(report.ongoingCompleted || []).filter(Boolean).length} items completed</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} style={{ color: T.neutral[400] }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <button onClick={(e) => { e.stopPropagation(); if (confirm(`Delete weekly report for week ending ${fmtDateShort(report.weekEnding)}?`)) dispatch({ type: "DELETE_WEEKLY", id: report.id }); }}
+                      style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[300], padding: "4px", borderRadius: "4px", display: "flex", alignItems: "center", justifyContent: "center" }}
+                      onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = T.neutral[300]; }}
+                      title="Delete weekly report"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                    <ChevronRight size={16} style={{ color: T.neutral[400] }} />
+                  </div>
                 </div>
               </Card>
             ))}
@@ -2822,13 +2857,23 @@ function WeeklyGenerator({ state, dispatch }) {
   const weekly = state.editingWeekly;
   const project = getActiveProject(state);
 
+  const [genWeek, setGenWeek] = useState(() => getWeekEnding(new Date()));
+
+  const projectDailies = state.dailyReports.filter(r => r.projectId === project?.id);
+  const genAvailableWeeks = useMemo(() => {
+    const weekSet = new Set();
+    projectDailies.forEach(r => weekSet.add(getWeekEnding(r.date)));
+    weekSet.add(getWeekEnding(new Date()));
+    return [...weekSet].sort().reverse();
+  }, [projectDailies]);
+
+  const genWeekReports = projectDailies.filter(r => getWeekEnding(r.date) === genWeek);
+
   if (!weekly) {
-    const weekEnding = getWeekEnding(new Date());
     const generateNew = () => {
-      const weekReports = state.dailyReports.filter(r => r.projectId === project.id && getWeekEnding(r.date) === weekEnding);
-      const agg = aggregateWeeklyData(weekReports, project);
+      const agg = aggregateWeeklyData(genWeekReports, project);
       dispatch({ type: "SET_EDITING_WEEKLY", data: {
-        id: `wr-${Date.now()}`, projectId: project.id, weekEnding,
+        id: `wr-${Date.now()}`, projectId: project.id, weekEnding: genWeek,
         ongoingCompleted: agg.ongoingCompleted,
         lookAhead: [""], outstandingRFIs: "None", hotSubmittals: "",
         safety: agg.safety,
@@ -2839,11 +2884,21 @@ function WeeklyGenerator({ state, dispatch }) {
     };
 
     return (
-      <div className="fade-in">
-        <EmptyState icon={CalendarRange} title="Generate Weekly Report"
-          description="Create a weekly report from this week's daily entries."
-          action={<Btn icon={Plus} onClick={generateNew}>Generate from Daily Reports</Btn>}
-        />
+      <div className="fade-in" style={{ maxWidth: "500px", margin: "60px auto", textAlign: "center" }}>
+        <CalendarRange size={48} style={{ color: T.neutral[300], marginBottom: "16px" }} />
+        <h3 style={{ fontSize: "18px", fontWeight: 700, color: T.navy[800], marginBottom: "8px" }}>Generate Weekly Report</h3>
+        <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "20px" }}>Select a week to generate a report from its daily entries.</p>
+        <select value={genWeek} onChange={e => setGenWeek(e.target.value)}
+          style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, fontSize: "14px", color: T.navy[700], background: T.white, cursor: "pointer", marginBottom: "12px" }}>
+          {genAvailableWeeks.map(we => {
+            const count = projectDailies.filter(r => getWeekEnding(r.date) === we).length;
+            return <option key={we} value={we}>Week ending {fmtDateShort(we)} ({count} {count === 1 ? "daily" : "dailies"})</option>;
+          })}
+        </select>
+        <Btn icon={Plus} onClick={generateNew} disabled={genWeekReports.length === 0}
+          style={{ width: "100%" }}>
+          Generate from {genWeekReports.length} {genWeekReports.length === 1 ? "daily" : "dailies"}
+        </Btn>
       </div>
     );
   }
@@ -2857,27 +2912,54 @@ function WeeklyGenerator({ state, dispatch }) {
   const addListItem = (field) => update({ [field]: [...weekly[field], ""] });
   const removeListItem = (field, index) => update({ [field]: weekly[field].filter((_, i) => i !== index) });
 
-  const ListEditor = ({ label, field }) => (
-    <div style={{ marginBottom: "12px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-        <span style={{ fontSize: "13px", fontWeight: 600, color: T.navy[600] }}>{label}</span>
-        <button onClick={() => addListItem(field)} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.orange[500], fontSize: "12px", fontWeight: 600 }}>+ Add</button>
-      </div>
-      {weekly[field].map((item, i) => (
-        <div key={i} style={{ display: "flex", gap: "6px", marginBottom: "4px" }}>
-          <span style={{ fontSize: "13px", color: T.neutral[400], padding: "8px 4px", minWidth: "16px" }}>&bull;</span>
-          <input value={item} onChange={e => updateList(field, i, e.target.value)}
-            style={{ flex: 1, padding: "7px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
-          />
-          {weekly[field].length > 1 && (
-            <button onClick={() => removeListItem(field, i)} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400] }}>
-              <X size={14} />
-            </button>
-          )}
+  // Stable keys for list items so inputs don't lose focus on re-render
+  const listKeysRef = useRef({});
+  const getListKeys = (field) => {
+    if (!listKeysRef.current[field]) listKeysRef.current[field] = [];
+    const keys = listKeysRef.current[field];
+    const list = weekly[field] || [];
+    // Grow key array to match list length
+    while (keys.length < list.length) keys.push(`${field}-${Date.now()}-${keys.length}`);
+    // Shrink if items were removed
+    if (keys.length > list.length) keys.length = list.length;
+    return keys;
+  };
+  const addListItemWithKey = (field) => {
+    const keys = getListKeys(field);
+    keys.push(`${field}-${Date.now()}-${keys.length}`);
+    addListItem(field);
+  };
+  const removeListItemWithKey = (field, index) => {
+    const keys = getListKeys(field);
+    keys.splice(index, 1);
+    removeListItem(field, index);
+  };
+
+  const ListEditor = useCallback(({ label, field }) => {
+    const keys = getListKeys(field);
+    const items = weekly[field] || [];
+    return (
+      <div style={{ marginBottom: "12px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+          <span style={{ fontSize: "13px", fontWeight: 600, color: T.navy[600] }}>{label}</span>
+          <button onClick={() => addListItemWithKey(field)} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.orange[500], fontSize: "12px", fontWeight: 600 }}>+ Add</button>
         </div>
-      ))}
-    </div>
-  );
+        {items.map((item, i) => (
+          <div key={keys[i]} style={{ display: "flex", gap: "6px", marginBottom: "4px" }}>
+            <span style={{ fontSize: "13px", color: T.neutral[400], padding: "8px 4px", minWidth: "16px" }}>&bull;</span>
+            <input value={item} onChange={e => updateList(field, i, e.target.value)}
+              style={{ flex: 1, padding: "7px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
+            />
+            {items.length > 1 && (
+              <button onClick={() => removeListItemWithKey(field, i)} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400] }}>
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }, [weekly]);
 
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
@@ -3056,6 +3138,9 @@ function WeeklyView({ state, dispatch }) {
           <p style={{ fontSize: "13px", color: T.neutral[500] }}>Week ending {fmtDateShort(weekly.weekEnding)} &middot; {project.jobName}</p>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
+          <Btn variant="ghost" icon={Trash2} onClick={() => { if (confirm(`Delete weekly report for week ending ${fmtDateShort(weekly.weekEnding)}?`)) { dispatch({ type: "DELETE_WEEKLY", id: weekly.id }); dispatch({ type: "SET_VIEW", view: "dashboard" }); } }}
+            style={{ color: T.neutral[400] }}
+          >Delete</Btn>
           <Btn variant="secondary" icon={Edit3} onClick={() => dispatch({ type: "SET_EDITING_WEEKLY", data: weekly })}>Edit</Btn>
           <Btn variant="navy" icon={FileDown} onClick={() => exportWeeklyPDF(weekly, project)}>Export PDF</Btn>
         </div>
@@ -3265,6 +3350,7 @@ export default function App() {
           else if (item.type === 'saveWeeklyReport') await saveWeeklyReport(item.data);
           else if (item.type === 'deleteProject') await deleteProject(item.data);
           else if (item.type === 'deleteDailyReport') await deleteDailyReport(item.data);
+          else if (item.type === 'deleteWeeklyReport') await deleteWeeklyReport(item.data);
         } catch (err) {
           console.error("Failed to sync item:", item, err);
         }
@@ -3343,6 +3429,18 @@ export default function App() {
   useEffect(() => {
     if (!loadedRef.current || state.loading) return;
     if (prevWeekliesRef.current !== null) {
+      // Detect deletions BEFORE updating the ref
+      const deletedWeeklies = prevWeekliesRef.current.filter(r => !state.weeklyReports.find(sr => sr.id === r.id));
+      deletedWeeklies.forEach(async (r) => {
+        if (isOnline()) {
+          deleteWeeklyReport(r.id).catch(err => console.error("Failed to delete weekly report:", err));
+        } else {
+          await addPendingSync({ type: 'deleteWeeklyReport', data: r.id });
+          setPendingSyncCount(c => c + 1);
+        }
+      });
+
+      // Then save changed/new weekly reports
       state.weeklyReports.forEach(async (r) => {
         const prev = prevWeekliesRef.current?.find(pr => pr.id === r.id);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(r)) {

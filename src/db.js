@@ -157,6 +157,12 @@ export async function saveWeeklyReport(report) {
   if (error) console.error('saveWeeklyReport error:', error)
 }
 
+export async function deleteWeeklyReport(id) {
+  if (!supabase) return
+  const { error } = await supabase.from('weekly_reports').delete().eq('id', id)
+  if (error) console.error('deleteWeeklyReport error:', error)
+}
+
 // ─── Photo Storage ───────────────────────────────────────────
 export async function uploadPhoto(file, projectId, reportId) {
   if (!supabase) {
