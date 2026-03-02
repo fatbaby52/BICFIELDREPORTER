@@ -2,6 +2,7 @@ import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } 
 import * as lucide from "lucide-react";
 import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, uploadPhoto, deletePhoto } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
+import SafetyMeetings from './SafetyMeetings';
 
 const {
   LayoutDashboard, FolderCog, ClipboardEdit, FileText, CalendarRange,
@@ -11,7 +12,7 @@ const {
   Building2, HardHat, Truck, Wrench, Users, Calendar, MapPin,
   FileSpreadsheet, FileDown, Menu, ChevronLeft, CircleDot, Search,
   Filter, Tag, TriangleAlert, CheckCircle2, Circle, Loader2, ChevronUp,
-  Wifi, WifiOff, RefreshCw, CloudOff
+  Wifi, WifiOff, RefreshCw, CloudOff, Shield
 } = lucide;
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1153,6 +1154,7 @@ function Sidebar({ currentView, dispatch, projects, activeProjectId }) {
     { id: "dailyEntry", icon: ClipboardEdit, label: "Daily Entry" },
     { id: "weeklyGen", icon: CalendarRange, label: "Weekly Report" },
     { id: "photos", icon: Image, label: "Photo Gallery" },
+    { id: "safety", icon: Shield, label: "Safety Meetings" },
   ];
   return (
     <nav className="desktop-sidebar" style={{
@@ -1288,6 +1290,7 @@ function MobileNav({ currentView, dispatch, projects, activeProjectId }) {
     { id: "dailyEntry", icon: ClipboardEdit, label: "Daily Entry" },
     { id: "weeklyGen", icon: CalendarRange, label: "Weekly Report" },
     { id: "photos", icon: Image, label: "Photo Gallery" },
+    { id: "safety", icon: Shield, label: "Safety Meetings" },
   ];
 
   const navigate = (view) => {
@@ -3173,6 +3176,7 @@ export default function App() {
       case "weeklyGen": return <WeeklyGenerator state={state} dispatch={dispatch} />;
       case "weeklyView": return <WeeklyView state={state} dispatch={dispatch} />;
       case "photos": return <PhotoGallery state={state} dispatch={dispatch} />;
+      case "safety": return <SafetyMeetings state={state} dispatch={dispatch} />;
       default: return <Dashboard state={state} dispatch={dispatch} />;
     }
   };
