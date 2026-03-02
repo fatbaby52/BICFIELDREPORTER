@@ -756,15 +756,15 @@ const exportWeeklyPDF = (weekly, project) => {
 
   /* Photo Page */
   .photo-page{background:#fff;min-height:100vh}
-  .photo-page .page{padding:40px}
-  .photo-header{display:flex;align-items:center;gap:12px;margin-bottom:28px;padding-bottom:16px;border-bottom:3px solid #e8853a}
-  .photo-header h2{font-size:22px;font-weight:800;color:#1a2744}
-  .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-  .photo-card{border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.1);border:1px solid #e5e7eb}
-  .photo-card img{width:100%;height:220px;object-fit:cover;display:block}
-  .photo-card-info{padding:16px 20px;background:#fff}
-  .photo-card-desc{font-size:14px;color:#1a2744;font-weight:600;margin-bottom:4px}
-  .photo-card-date{font-size:12px;color:#6b7280}
+  .photo-page .page{padding:24px 32px}
+  .photo-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a}
+  .photo-header h2{font-size:18px;font-weight:800;color:#1a2744}
+  .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .photo-card{border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);border:1px solid #e5e7eb}
+  .photo-card img{width:100%;height:140px;object-fit:cover;display:block}
+  .photo-card-info{padding:5px 8px;background:#fff}
+  .photo-card-desc{font-size:11px;color:#1a2744;font-weight:600;margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .photo-card-date{font-size:10px;color:#6b7280}
 
   /* Repeating header table structure */
   .report-wrapper{display:table;width:100%}
@@ -846,14 +846,17 @@ const exportWeeklyPDF = (weekly, project) => {
     .red{color:#ef4444!important}
     .orange{color:#e8853a!important}
 
-    /* Photo page — keep white background for photos */
+    /* Photo page — 3 rows × 2 cols = 6 per page */
     .photo-page{background:#fff!important}
-    .photo-grid{display:grid!important;grid-template-columns:1fr 1fr!important;gap:24px!important}
-    .photo-card{border:1px solid #e5e7eb!important;border-radius:12px;overflow:hidden;page-break-inside:avoid}
-    .photo-card img{display:block!important;max-width:100%!important;height:auto!important;width:100%!important}
-    .photo-card-info{padding:16px 20px;background:#fff!important;color:#1a2744!important}
-    .photo-card-desc{font-size:14px;color:#1a2744!important;font-weight:600;margin-bottom:4px}
-    .photo-card-date{font-size:12px;color:#6b7280!important}
+    .photo-page .page{padding:20px 28px!important}
+    .photo-header{margin-bottom:12px!important;padding-bottom:8px!important}
+    .photo-header h2{font-size:16px!important}
+    .photo-grid{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+    .photo-card{border:1px solid #e5e7eb!important;border-radius:6px;overflow:hidden;page-break-inside:avoid}
+    .photo-card img{display:block!important;width:100%!important;height:130px!important;object-fit:cover!important}
+    .photo-card-info{padding:4px 8px!important;background:#fff!important;color:#1a2744!important}
+    .photo-card-desc{font-size:10px!important;color:#1a2744!important;font-weight:600;margin-bottom:1px}
+    .photo-card-date{font-size:9px!important;color:#6b7280!important}
 
     /* Footer */
     .footer{text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.1);color:#6b7280!important;font-size:11px}
