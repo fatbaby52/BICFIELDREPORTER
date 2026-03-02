@@ -418,25 +418,35 @@ const WeatherIcon = ({ weather }) => {
 
 // ─── Date Helpers ────────────────────────────────────────────
 const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+// Parse date strings as local noon to avoid UTC timezone shift
+const parseLocalDate = (d) => {
+  if (!d) return null;
+  // If it's already a Date object, return it; otherwise parse as local noon
+  if (d instanceof Date) return d;
+  const str = String(d);
+  // "YYYY-MM-DD" → parse as noon local time to avoid off-by-one
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return new Date(str + "T12:00:00");
+  return new Date(str);
+};
 const fmtDate = (d) => {
-  if (!d) return "";
-  const dt = new Date(d);
+  const dt = parseLocalDate(d);
+  if (!dt || isNaN(dt)) return "";
   return `${DAYS[dt.getDay()]}, ${dt.getMonth()+1}/${dt.getDate()}/${String(dt.getFullYear()).slice(2)}`;
 };
 const fmtDateShort = (d) => {
-  if (!d) return "";
-  const dt = new Date(d);
+  const dt = parseLocalDate(d);
+  if (!dt || isNaN(dt)) return "";
   return `${dt.getMonth()+1}/${dt.getDate()}/${String(dt.getFullYear()).slice(2)}`;
 };
 const toISODate = (d) => {
-  const dt = new Date(d);
+  const dt = parseLocalDate(d) || new Date(d);
   const year = dt.getFullYear();
   const month = String(dt.getMonth() + 1).padStart(2, "0");
   const day = String(dt.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
 const getWeekEnding = (d) => {
-  const dt = new Date(d);
+  const dt = parseLocalDate(d) || new Date(d);
   const day = dt.getDay();
   const diff = (5 - day + 7) % 7;
   dt.setDate(dt.getDate() + diff);
@@ -669,7 +679,7 @@ ${includePhotos && (report.photos || []).filter(p => p.starred).length > 0 ? `
 };
 
 const exportWeeklyPDF = (weekly, project) => {
-  const fmtD = (d) => { if (!d) return ""; const dt = new Date(d); return `${dt.getMonth()+1}/${dt.getDate()}/${String(dt.getFullYear()).slice(2)}`; };
+  const fmtD = fmtDateShort;
 
   // White logo for dark background
   const BIC_LOGO_WHITE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 50" style="height:36px">
@@ -967,7 +977,7 @@ ${(weekly.selectedPhotos || []).filter(p => p.selected !== false).length > 0 ? `
           <img src="${p.url}" alt="${p.description}">
           <div class="photo-card-info">
             <div class="photo-card-desc">${p.description}</div>
-            <div class="photo-card-date">${p.date || ""}</div>
+            <div class="photo-card-date">${fmtDateShort(p.date)}</div>
           </div>
         </div>
       `).join("")}
