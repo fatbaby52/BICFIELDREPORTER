@@ -549,10 +549,10 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
   .ok{color:#059669;font-weight:600}
   .footer{text-align:center;font-size:11px;color:#6b7280;margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb}
   .footer strong{color:#1a2744}
-  .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px}
-  .photo-card{border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
-  .photo-card img{width:100%;height:auto;display:block}
-  .photo-card-caption{padding:12px 16px;background:#fff;font-size:12px;color:#1a2744;font-weight:500}
+  .photo-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px}
+  .photo-card{border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+  .photo-card img{width:100%;height:140px;object-fit:cover;display:block}
+  .photo-card-caption{padding:6px 10px;background:#fff;font-size:10px;color:#1a2744;font-weight:500}
   @media print{
     *,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
     html,body{background:#fff!important}
@@ -560,8 +560,9 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
     /* Convert grids to stacked blocks for print compatibility */
     .grid{display:block!important}
     .grid>.section,.grid>.info-box{margin-bottom:12px!important;page-break-inside:avoid}
-    .photo-grid{display:block!important}
-    .photo-card{margin-bottom:16px!important;page-break-inside:avoid}
+    .photo-grid{display:grid!important;grid-template-columns:1fr 1fr 1fr!important;gap:10px!important}
+    .photo-card{page-break-inside:avoid}
+    .photo-card img{height:140px!important;object-fit:cover!important}
     /* Ensure backgrounds print with solid colors (gradients can fail) */
     .masthead{margin:0 0 20px;border-radius:8px;background:#1a2744!important;border:2px solid #1a2744}
     .masthead::before{display:none!important}
@@ -634,11 +635,11 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
   <div class="info-box"><div class="info-box-title">Extra Work / Claims / Misc.</div><div class="info-box-content">${report.extraWork || "None"}</div></div>
 </div>
 
-${includePhotos && (report.photos || []).length > 0 ? `
+${includePhotos && (report.photos || []).filter(p => p.starred).length > 0 ? `
 <div class="section">
   <div class="section-title">Progress Photos</div>
   <div class="photo-grid">
-    ${report.photos.map(p => `<div class="photo-card">
+    ${report.photos.filter(p => p.starred).map(p => `<div class="photo-card">
       <img src="${p.url}" alt="${p.title || p.description}">
       <div class="photo-card-caption">
         ${p.title ? `<strong>${p.title}</strong>` : ""}
@@ -2112,6 +2113,15 @@ function DailyEntry({ state, dispatch }) {
   );
 
   const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N, photos: [{status}] } or null
+  const uploadCancelledRef = useRef(false);
+
+  // Warn user if they try to navigate away mid-upload
+  useEffect(() => {
+    if (!uploadProgress) return;
+    const handleBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [uploadProgress]);
 
   // Check if a file is HEIC/HEIF format (iPhone default)
   const isHeic = (file) => {
@@ -2166,6 +2176,7 @@ function DailyEntry({ state, dispatch }) {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     e.target.value = "";
+    uploadCancelledRef.current = false;
 
     const baseCount = (report.photos?.length || 0);
     const baseTitle = photoDesc || "";
@@ -2179,8 +2190,11 @@ function DailyEntry({ state, dispatch }) {
 
     // Process ONE at a time to keep memory low (each image decompresses fully in the canvas)
     for (let i = 0; i < files.length; i++) {
+      // Stop if upload was cancelled (user navigated away or hit cancel)
+      if (uploadCancelledRef.current) break;
+
       photoStatuses[i] = "processing";
-      setUploadProgress({ done: i, total: files.length, photos: [...photoStatuses] });
+      setUploadProgress({ done: i, total: files.length, photos: [...photoStatuses], heic: hasHeic });
       try {
         const [url, thumb] = await Promise.all([
           compressImage(files[i], 1600, 0.7),
@@ -2202,7 +2216,7 @@ function DailyEntry({ state, dispatch }) {
         console.error(`Failed to process photo ${i + 1}:`, err);
         photoStatuses[i] = "error";
       }
-      setUploadProgress({ done: i + 1, total: files.length, photos: [...photoStatuses] });
+      setUploadProgress({ done: i + 1, total: files.length, photos: [...photoStatuses], heic: hasHeic });
 
       // Yield to the UI thread every 3 photos so the browser stays responsive
       if ((i + 1) % 3 === 0) await new Promise(r => setTimeout(r, 0));
@@ -2508,9 +2522,15 @@ function DailyEntry({ state, dispatch }) {
         </div>
         {uploadProgress && (
           <div style={{ marginBottom: "12px", background: T.neutral[50], border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md, padding: "12px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: T.neutral[500], marginBottom: "6px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px", color: T.neutral[500], marginBottom: "6px" }}>
               <span>Processing photos{uploadProgress.heic ? " (converting HEIC)..." : "..."}</span>
-              <span style={{ fontWeight: 600 }}>{uploadProgress.done} / {uploadProgress.total}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontWeight: 600 }}>{uploadProgress.done} / {uploadProgress.total}</span>
+                <button onClick={() => { uploadCancelledRef.current = true; }}
+                  style={{ fontSize: "11px", fontWeight: 600, color: T.red[500], background: "transparent", border: `1px solid ${T.red[300]}`, borderRadius: "4px", padding: "2px 8px", cursor: "pointer" }}>
+                  Cancel
+                </button>
+              </div>
             </div>
             <div style={{ height: "8px", background: T.neutral[200], borderRadius: "4px", overflow: "hidden", marginBottom: "8px" }}>
               <div style={{ height: "100%", background: T.orange[500], borderRadius: "4px", transition: "width 0.3s ease", width: `${(uploadProgress.done / uploadProgress.total) * 100}%` }} />
