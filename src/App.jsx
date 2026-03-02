@@ -3,6 +3,7 @@ import * as lucide from "lucide-react";
 import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, uploadPhoto, deletePhoto } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 import SafetyMeetings from './SafetyMeetings';
+import heic2any from 'heic2any';
 
 const {
   LayoutDashboard, FolderCog, ClipboardEdit, FileText, CalendarRange,
@@ -2112,33 +2113,51 @@ function DailyEntry({ state, dispatch }) {
 
   const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N, photos: [{status}] } or null
 
+  // Check if a file is HEIC/HEIF format (iPhone default)
+  const isHeic = (file) => {
+    const name = (file.name || "").toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    return name.endsWith(".heic") || name.endsWith(".heif") || type === "image/heic" || type === "image/heif";
+  };
+
+  // Convert HEIC to JPEG blob using heic2any
+  const convertHeicToJpeg = async (file) => {
+    const blob = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.85 });
+    // heic2any can return a single blob or an array; handle both
+    return Array.isArray(blob) ? blob[0] : blob;
+  };
+
   // Resize & compress an image file using canvas — returns a much smaller JPEG data URL
-  const compressImage = (file, maxDim = 1600, quality = 0.7) => new Promise((resolve, reject) => {
-    // File IS a Blob — create object URL directly, no FileReader needed
-    const objectUrl = URL.createObjectURL(file);
-    const img = new window.Image();
-    img.onload = () => {
-      let { width, height } = img;
-      if (width > maxDim || height > maxDim) {
-        const scale = maxDim / Math.max(width, height);
-        width = Math.round(width * scale);
-        height = Math.round(height * scale);
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL("image/jpeg", quality);
-      URL.revokeObjectURL(objectUrl);
-      resolve(dataUrl);
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error(`Failed to load image: ${file.name}`));
-    };
-    img.src = objectUrl;
-  });
+  const compressImage = async (file, maxDim = 1600, quality = 0.7) => {
+    // Convert HEIC to JPEG first if needed — browsers can't render HEIC natively
+    const imageBlob = isHeic(file) ? await convertHeicToJpeg(file) : file;
+
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(imageBlob);
+      const img = new window.Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        URL.revokeObjectURL(objectUrl);
+        resolve(dataUrl);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error(`Failed to load image: ${file.name}`));
+      };
+      img.src = objectUrl;
+    });
+  };
 
   // Create a small thumbnail for grid display
   const makeThumbnail = (file) => compressImage(file, 400, 0.6);
@@ -2152,8 +2171,9 @@ function DailyEntry({ state, dispatch }) {
     const baseTitle = photoDesc || "";
 
     // Initialize per-photo progress: "pending" → "processing" → "done" / "error"
+    const hasHeic = files.some(f => isHeic(f));
     const photoStatuses = files.map(() => "pending");
-    setUploadProgress({ done: 0, total: files.length, photos: [...photoStatuses] });
+    setUploadProgress({ done: 0, total: files.length, photos: [...photoStatuses], heic: hasHeic });
 
     const allNewPhotos = [];
 
@@ -2477,8 +2497,8 @@ function DailyEntry({ state, dispatch }) {
 
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={Camera}>Progress Photos</SectionTitle>
-        <input type="file" accept="image/*" multiple ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
-        <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
+        <input type="file" accept="image/*,.heic,.heif" multiple ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
+        <input type="file" accept="image/*,.heic,.heif" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
         <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
           <Input placeholder="Photo title (optional)..." value={photoDesc} onChange={e => setPhotoDesc(e.target.value)} style={{ flex: 1 }} />
           <Btn icon={Upload} variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={!!uploadProgress}>
@@ -2489,7 +2509,7 @@ function DailyEntry({ state, dispatch }) {
         {uploadProgress && (
           <div style={{ marginBottom: "12px", background: T.neutral[50], border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md, padding: "12px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: T.neutral[500], marginBottom: "6px" }}>
-              <span>Resizing &amp; compressing photos...</span>
+              <span>Processing photos{uploadProgress.heic ? " (converting HEIC)..." : "..."}</span>
               <span style={{ fontWeight: 600 }}>{uploadProgress.done} / {uploadProgress.total}</span>
             </div>
             <div style={{ height: "8px", background: T.neutral[200], borderRadius: "4px", overflow: "hidden", marginBottom: "8px" }}>
