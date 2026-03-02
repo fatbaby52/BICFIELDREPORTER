@@ -481,7 +481,7 @@ const exportDailyExcel = (report, project) => {
   roleKeys.forEach((k, i) => {
     const men = report.workforce[k]?.men || 0;
     const hrs = report.workforce[k]?.hours || 0;
-    row(roles[i], men, hrs, men * hrs);
+    row(roles[i], men || "—", men ? hrs : "—", men ? (men * hrs) : "—");
   });
   row("Total", totalMen, "", totalHours); row("");
   row("MAJOR EQUIPMENT");
@@ -616,7 +616,7 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
       ${roleKeys.map((k, i) => {
         const men = report.workforce[k]?.men || 0;
         const hrs = report.workforce[k]?.hours || 0;
-        return `<tr><td>${roles[i]}</td><td style="text-align:center">${men || "—"}</td><td style="text-align:center">${hrs || "—"}</td><td style="text-align:center">${men * hrs || "—"}</td></tr>`;
+        return `<tr><td>${roles[i]}</td><td style="text-align:center">${men || "—"}</td><td style="text-align:center">${men ? hrs : "—"}</td><td style="text-align:center">${men ? (men * hrs) : "—"}</td></tr>`;
       }).join("")}
       <tr class="total-row"><td>Total</td><td style="text-align:center">${totalMen}</td><td></td><td style="text-align:center">${totalHours} hrs</td></tr>
     </table>
@@ -2332,12 +2332,18 @@ function DailyEntry({ state, dispatch }) {
                   {stepperBtn(() => updateWorkforce(r.key, "men", menVal + 1), <ChevronUp size={12} />)}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
-                  {stepperBtn(() => updateWorkforce(r.key, "hours", Math.max(0, hoursVal - 1)), <ChevronDown size={12} />)}
-                  <span style={{
-                    minWidth: "24px", textAlign: "center", fontSize: "14px", fontWeight: 700,
-                    color: hoursVal > 0 ? T.navy[800] : T.neutral[300],
-                  }}>{hoursVal}</span>
-                  {stepperBtn(() => updateWorkforce(r.key, "hours", hoursVal + 1), <ChevronUp size={12} />)}
+                  {menVal > 0 ? (
+                    <>
+                      {stepperBtn(() => updateWorkforce(r.key, "hours", Math.max(0, hoursVal - 1)), <ChevronDown size={12} />)}
+                      <span style={{
+                        minWidth: "24px", textAlign: "center", fontSize: "14px", fontWeight: 700,
+                        color: T.navy[800],
+                      }}>{hoursVal}</span>
+                      {stepperBtn(() => updateWorkforce(r.key, "hours", hoursVal + 1), <ChevronUp size={12} />)}
+                    </>
+                  ) : (
+                    <span style={{ minWidth: "24px", textAlign: "center", fontSize: "14px", color: T.neutral[300] }}>—</span>
+                  )}
                 </div>
               </div>
             );
@@ -2745,8 +2751,8 @@ function DailyView({ state, dispatch }) {
                   <tr key={r.key} style={{ borderBottom: `1px solid ${T.neutral[100]}` }}>
                     <td style={{ padding: "7px 12px" }}>{r.label}</td>
                     <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{men || "—"}</td>
-                    <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{hrs || "—"}</td>
-                    <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600, color: men > 0 ? T.navy[800] : T.neutral[300] }}>{men * hrs || "—"}</td>
+                    <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{men ? hrs : "—"}</td>
+                    <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600, color: men > 0 ? T.navy[800] : T.neutral[300] }}>{men ? (men * hrs) : "—"}</td>
                   </tr>
                 );
               })}
