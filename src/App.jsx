@@ -1795,6 +1795,30 @@ function Dashboard({ state, dispatch }) {
             <div style={{ fontSize: "12px", color: T.neutral[500] }}>View all progress photos</div>
           </div>
         </button>
+
+        <button onClick={() => {
+          const shareUrl = `${window.location.origin}#share=${project.id}`;
+          navigator.clipboard.writeText(shareUrl).then(() => {
+            alert("Share link copied to clipboard!\n\nSend this link to your client:\n" + shareUrl);
+          }).catch(() => {
+            prompt("Copy this link to share with your client:", shareUrl);
+          });
+        }} style={{
+          display: "flex", alignItems: "center", gap: "12px", padding: "16px 20px",
+          background: T.white, border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.lg,
+          cursor: "pointer", transition: "all 0.2s",
+        }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = T.orange[500]; e.currentTarget.style.background = T.orange[50]; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = T.neutral[200]; e.currentTarget.style.background = T.white; }}
+        >
+          <div style={{ width: "40px", height: "40px", borderRadius: T.radius.md, background: T.orange[100], display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Eye size={20} style={{ color: T.orange[600] }} />
+          </div>
+          <div style={{ textAlign: "left" }}>
+            <div style={{ fontWeight: 700, fontSize: "14px", color: T.navy[800] }}>Share with Client</div>
+            <div style={{ fontSize: "12px", color: T.neutral[500] }}>Copy read-only dashboard link</div>
+          </div>
+        </button>
       </div>
 
       <SectionTitle icon={FileText}>Recent Daily Reports</SectionTitle>
@@ -3263,6 +3287,352 @@ function PhotoGallery({ state, dispatch }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// CLIENT PORTAL — Read-only dashboard for project owners
+// ═══════════════════════════════════════════════════════════════
+function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
+
+  const project = projects.find(p => p.id === projectId);
+  const projectDailies = dailyReports.filter(r => r.projectId === projectId).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const projectWeeklies = weeklyReports.filter(r => r.projectId === projectId).sort((a, b) => new Date(b.weekEnding) - new Date(a.weekEnding));
+
+  if (!project) {
+    return (
+      <div style={{ minHeight: "100vh", background: T.navy[800], display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ textAlign: "center", color: T.white }}>
+          <AlertTriangle size={48} style={{ color: T.orange[500], marginBottom: "16px" }} />
+          <h2 style={{ fontSize: "24px", fontWeight: 700, marginBottom: "8px" }}>Project Not Found</h2>
+          <p style={{ color: T.navy[400] }}>This project link may be invalid or expired.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Calculate stats
+  const totalDays = projectDailies.length;
+  const totalWorkforceHours = projectDailies.reduce((sum, r) => {
+    const roleKeys = ["indirectLabor", "apprentices", "foreman", "operators", "laborers", "carpenters", "cementMasons"];
+    return sum + roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
+  }, 0);
+  const completedMilestones = project.milestones?.filter(m => m.actualDate)?.length || 0;
+  const totalMilestones = project.milestones?.length || 0;
+  const allPhotos = projectDailies.flatMap(r => (r.photos || []).map(p => ({ ...p, date: r.date })));
+  const recentDelays = projectDailies.slice(0, 7).filter(r => r.delaysProblems).map(r => ({ date: r.date, issue: r.delaysProblems }));
+
+  // AI Q&A handler
+  const handleAskQuestion = async () => {
+    if (!question.trim() || loading) return;
+    setLoading(true);
+    setAnswer("");
+    try {
+      const trimmedReports = projectDailies.slice(0, 15).map(r => ({
+        date: r.date, weather: r.weather, temperature: r.temperature, rainfall: r.rainfall,
+        shift: r.shift, generalNotes: r.generalNotes?.substring(0, 500) || "",
+        incidents: r.incidents, delaysProblems: r.delaysProblems, extraWork: r.extraWork,
+        materialDeliveries: r.materialDeliveries, workforce: r.workforce
+      }));
+      const response = await fetch("/.netlify/functions/project-qa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: question.trim(),
+          project: { jobName: project.jobName, jobNumber: project.jobNumber, client: project.client, milestones: project.milestones },
+          dailyReports: trimmedReports
+        })
+      });
+      const data = await response.json();
+      setAnswer(data.answer || "I couldn't find an answer to that question.");
+    } catch (err) {
+      setAnswer("Sorry, I couldn't process that question. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const TabBtn = ({ id, label, icon: Icon }) => (
+    <button onClick={() => setActiveTab(id)} style={{
+      display: "flex", alignItems: "center", gap: "8px",
+      padding: "12px 20px", border: "none", borderRadius: "8px",
+      background: activeTab === id ? T.orange[500] : "rgba(255,255,255,0.1)",
+      color: T.white, fontWeight: 600, fontSize: "14px", cursor: "pointer",
+      transition: "all 0.2s",
+    }}>
+      <Icon size={18} /> {label}
+    </button>
+  );
+
+  const StatCard = ({ label, value, icon: Icon, color = T.orange[500] }) => (
+    <div style={{
+      background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+      borderRadius: "12px", padding: "20px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
+        <div style={{ background: color, padding: "10px", borderRadius: "10px" }}>
+          <Icon size={20} style={{ color: T.white }} />
+        </div>
+        <span style={{ fontSize: "12px", color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</span>
+      </div>
+      <div style={{ fontSize: "28px", fontWeight: 800, color: T.white }}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(135deg, ${T.navy[800]} 0%, #0f172a 100%)` }}>
+      {/* Header */}
+      <div style={{ background: "rgba(0,0,0,0.2)", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "20px 32px" }}>
+        <div style={{ maxWidth: "1200px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "4px" }}>
+              <span style={{ background: T.orange[500], color: T.white, padding: "4px 12px", borderRadius: "20px", fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                Client Portal
+              </span>
+              <span style={{ color: T.navy[400], fontSize: "13px" }}>JOB #{project.jobNumber}</span>
+            </div>
+            <h1 style={{ fontSize: "28px", fontWeight: 800, color: T.white, letterSpacing: "-0.02em" }}>{project.jobName}</h1>
+            <p style={{ fontSize: "14px", color: T.navy[400], marginTop: "4px" }}>{project.client}</p>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: "12px", color: T.navy[400], marginBottom: "4px" }}>Powered by</div>
+            <div style={{ fontSize: "24px", fontWeight: 700, color: T.white, fontFamily: "Georgia, serif" }}>BIC</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <div style={{ background: "rgba(0,0,0,0.1)", padding: "16px 32px" }}>
+        <div style={{ maxWidth: "1200px", margin: "0 auto", display: "flex", gap: "12px" }}>
+          <TabBtn id="overview" label="Overview" icon={LayoutDashboard} />
+          <TabBtn id="reports" label="Daily Reports" icon={ClipboardEdit} />
+          <TabBtn id="weekly" label="Weekly Reports" icon={CalendarRange} />
+          <TabBtn id="photos" label="Photos" icon={Image} />
+          <TabBtn id="ask" label="Ask AI" icon={Sparkles} />
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "32px" }}>
+
+        {/* Overview Tab */}
+        {activeTab === "overview" && (
+          <div className="fade-in">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "20px", marginBottom: "32px" }}>
+              <StatCard label="Daily Reports" value={totalDays} icon={ClipboardEdit} />
+              <StatCard label="Total Workforce Hours" value={totalWorkforceHours.toLocaleString()} icon={Users} color={T.navy[600]} />
+              <StatCard label="Milestones Complete" value={`${completedMilestones}/${totalMilestones}`} icon={CheckCircle2} color="#059669" />
+              <StatCard label="Progress Photos" value={allPhotos.length} icon={Camera} color="#7c3aed" />
+            </div>
+
+            {/* Milestones */}
+            {project.milestones?.length > 0 && (
+              <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
+                <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.white, marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <CircleDot size={18} style={{ color: T.orange[500] }} /> Project Milestones
+                </h3>
+                <div style={{ display: "grid", gap: "12px" }}>
+                  {project.milestones.map((m, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "rgba(0,0,0,0.2)", borderRadius: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        {m.actualDate ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
+                        <span style={{ color: T.white, fontWeight: 500 }}>{m.name}</span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "13px", color: m.actualDate ? "#4ade80" : T.navy[400] }}>
+                          {m.actualDate ? `Completed ${fmtDateShort(m.actualDate)}` : `Target: ${fmtDateShort(m.targetDate)}`}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recent Activity */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+              <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px" }}>
+                <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.white, marginBottom: "16px" }}>Recent Reports</h3>
+                {projectDailies.slice(0, 5).map((r, i) => (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: i < 4 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+                    <div>
+                      <div style={{ fontSize: "14px", color: T.white, fontWeight: 500 }}>{fmtDateShort(r.date)}</div>
+                      <div style={{ fontSize: "12px", color: T.navy[400] }}>{r.weather}{r.temperature ? ` · ${r.temperature}` : ""}</div>
+                    </div>
+                    {r.delaysProblems && <span style={{ background: "#dc2626", color: T.white, padding: "2px 8px", borderRadius: "4px", fontSize: "10px", fontWeight: 600 }}>DELAY</span>}
+                  </div>
+                ))}
+              </div>
+
+              {recentDelays.length > 0 && (
+                <div style={{ background: "rgba(220,38,38,0.1)", border: "1px solid rgba(220,38,38,0.3)", borderRadius: "12px", padding: "24px" }}>
+                  <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#fca5a5", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <AlertTriangle size={18} /> Recent Issues
+                  </h3>
+                  {recentDelays.map((d, i) => (
+                    <div key={i} style={{ marginBottom: "12px", paddingBottom: "12px", borderBottom: i < recentDelays.length - 1 ? "1px solid rgba(255,255,255,0.1)" : "none" }}>
+                      <div style={{ fontSize: "12px", color: "#fca5a5", marginBottom: "4px" }}>{fmtDateShort(d.date)}</div>
+                      <div style={{ fontSize: "13px", color: T.white }}>{d.issue}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Daily Reports Tab */}
+        {activeTab === "reports" && (
+          <div className="fade-in">
+            <h2 style={{ fontSize: "20px", fontWeight: 700, color: T.white, marginBottom: "20px" }}>Daily Reports</h2>
+            <div style={{ display: "grid", gap: "16px" }}>
+              {projectDailies.map(r => {
+                const roleKeys = ["indirectLabor", "apprentices", "foreman", "operators", "laborers", "carpenters", "cementMasons"];
+                const totalHrs = roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
+                return (
+                  <div key={r.id} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+                      <div>
+                        <div style={{ fontSize: "18px", fontWeight: 700, color: T.white }}>{fmtDate(r.date)}</div>
+                        <div style={{ fontSize: "13px", color: T.navy[400] }}>{r.day} · {r.weather}{r.temperature ? ` · ${r.temperature}` : ""}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "13px", color: T.orange[500], fontWeight: 600 }}>{totalHrs} labor hours</div>
+                        <div style={{ fontSize: "12px", color: T.navy[400] }}>Shift: {r.shift?.hours} {r.shift?.type}</div>
+                      </div>
+                    </div>
+                    {r.generalNotes && <p style={{ fontSize: "14px", color: T.white, lineHeight: 1.6, marginBottom: "12px" }}>{r.generalNotes}</p>}
+                    {r.delaysProblems && (
+                      <div style={{ background: "rgba(220,38,38,0.2)", border: "1px solid rgba(220,38,38,0.3)", borderRadius: "8px", padding: "12px", marginTop: "8px" }}>
+                        <div style={{ fontSize: "11px", color: "#fca5a5", fontWeight: 600, marginBottom: "4px" }}>DELAYS / PROBLEMS</div>
+                        <div style={{ fontSize: "13px", color: T.white }}>{r.delaysProblems}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {projectDailies.length === 0 && <p style={{ color: T.navy[400], textAlign: "center", padding: "40px" }}>No daily reports yet.</p>}
+            </div>
+          </div>
+        )}
+
+        {/* Weekly Reports Tab */}
+        {activeTab === "weekly" && (
+          <div className="fade-in">
+            <h2 style={{ fontSize: "20px", fontWeight: 700, color: T.white, marginBottom: "20px" }}>Weekly Reports</h2>
+            <div style={{ display: "grid", gap: "16px" }}>
+              {projectWeeklies.map(w => (
+                <div key={w.id} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px" }}>
+                  <div style={{ fontSize: "18px", fontWeight: 700, color: T.white, marginBottom: "16px" }}>Week Ending {fmtDateShort(w.weekEnding)}</div>
+                  {w.ongoingCompleted?.length > 0 && (
+                    <div style={{ marginBottom: "16px" }}>
+                      <div style={{ fontSize: "12px", color: T.orange[500], fontWeight: 600, marginBottom: "8px" }}>WORK COMPLETED / ONGOING</div>
+                      <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                        {w.ongoingCompleted.filter(Boolean).map((item, i) => (
+                          <li key={i} style={{ color: T.white, fontSize: "14px", marginBottom: "4px" }}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {w.hindrances && (
+                    <div style={{ background: "rgba(220,38,38,0.1)", padding: "12px", borderRadius: "8px" }}>
+                      <div style={{ fontSize: "11px", color: "#fca5a5", fontWeight: 600, marginBottom: "4px" }}>HINDRANCES</div>
+                      <div style={{ fontSize: "13px", color: T.white }}>{w.hindrances}</div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {projectWeeklies.length === 0 && <p style={{ color: T.navy[400], textAlign: "center", padding: "40px" }}>No weekly reports yet.</p>}
+            </div>
+          </div>
+        )}
+
+        {/* Photos Tab */}
+        {activeTab === "photos" && (
+          <div className="fade-in">
+            <h2 style={{ fontSize: "20px", fontWeight: 700, color: T.white, marginBottom: "20px" }}>Progress Photos ({allPhotos.length})</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "20px" }}>
+              {allPhotos.map((p, i) => (
+                <div key={p.id || i} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", overflow: "hidden" }}>
+                  <img src={p.url} alt={p.title || p.description} style={{ width: "100%", height: "200px", objectFit: "cover", display: "block" }} />
+                  <div style={{ padding: "16px" }}>
+                    {p.title && <div style={{ fontSize: "14px", fontWeight: 600, color: T.white, marginBottom: "4px" }}>{p.title}</div>}
+                    {p.description && <div style={{ fontSize: "13px", color: T.navy[400], marginBottom: "8px" }}>{p.description}</div>}
+                    <div style={{ fontSize: "12px", color: T.navy[500] }}>{fmtDateShort(p.date)}</div>
+                  </div>
+                </div>
+              ))}
+              {allPhotos.length === 0 && <p style={{ color: T.navy[400], textAlign: "center", padding: "40px", gridColumn: "1/-1" }}>No photos yet.</p>}
+            </div>
+          </div>
+        )}
+
+        {/* Ask AI Tab */}
+        {activeTab === "ask" && (
+          <div className="fade-in">
+            <div style={{ maxWidth: "700px", margin: "0 auto" }}>
+              <div style={{ textAlign: "center", marginBottom: "32px" }}>
+                <div style={{ background: T.orange[500], width: "64px", height: "64px", borderRadius: "16px", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+                  <Sparkles size={32} style={{ color: T.white }} />
+                </div>
+                <h2 style={{ fontSize: "24px", fontWeight: 700, color: T.white, marginBottom: "8px" }}>Ask About This Project</h2>
+                <p style={{ fontSize: "14px", color: T.navy[400] }}>Get instant answers about progress, timelines, issues, and more.</p>
+              </div>
+
+              <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px" }}>
+                <div style={{ display: "flex", gap: "12px", marginBottom: "16px" }}>
+                  <input
+                    type="text"
+                    value={question}
+                    onChange={e => setQuestion(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && handleAskQuestion()}
+                    placeholder="e.g., What caused the delays last week?"
+                    style={{
+                      flex: 1, padding: "14px 18px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.2)",
+                      background: "rgba(0,0,0,0.2)", color: T.white, fontSize: "15px", outline: "none", fontFamily: T.font,
+                    }}
+                  />
+                  <button onClick={handleAskQuestion} disabled={loading || !question.trim()} style={{
+                    padding: "14px 24px", borderRadius: "8px", border: "none",
+                    background: T.orange[500], color: T.white, fontWeight: 600, fontSize: "15px",
+                    cursor: loading ? "wait" : "pointer", opacity: loading || !question.trim() ? 0.6 : 1,
+                    display: "flex", alignItems: "center", gap: "8px",
+                  }}>
+                    {loading ? <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> : <Search size={18} />}
+                    {loading ? "Thinking..." : "Ask"}
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" }}>
+                  {["What work was done this week?", "Any delays or issues?", "How many labor hours total?", "What's the milestone status?"].map(q => (
+                    <button key={q} onClick={() => setQuestion(q)} style={{
+                      padding: "6px 12px", borderRadius: "20px", border: "1px solid rgba(255,255,255,0.2)",
+                      background: "transparent", color: T.navy[400], fontSize: "12px", cursor: "pointer",
+                    }}>{q}</button>
+                  ))}
+                </div>
+
+                {answer && (
+                  <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "8px", padding: "20px", marginTop: "16px" }}>
+                    <div style={{ fontSize: "11px", color: T.orange[500], fontWeight: 600, marginBottom: "8px" }}>AI RESPONSE</div>
+                    <div style={{ fontSize: "15px", color: T.white, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{answer}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", padding: "20px 32px", textAlign: "center" }}>
+        <p style={{ fontSize: "12px", color: T.navy[500] }}>Blue Iron Corp. | Ca. License #65233 | Powered by BIC Field Reporter</p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MAIN APP WITH SUPABASE PERSISTENCE + OFFLINE SUPPORT
 // ═══════════════════════════════════════════════════════════════
 export default function App() {
@@ -3275,6 +3645,17 @@ export default function App() {
   const prevProjectsRef = useRef(null);
   const prevDailiesRef = useRef(null);
   const prevWeekliesRef = useRef(null);
+
+  // Check for client portal mode (URL: /share/PROJECT_ID or #share=PROJECT_ID)
+  const [clientPortalId, setClientPortalId] = useState(() => {
+    const hash = window.location.hash;
+    const path = window.location.pathname;
+    // Check hash: #share=proj-123
+    if (hash.startsWith("#share=")) return hash.replace("#share=", "");
+    // Check path: /share/proj-123
+    if (path.startsWith("/share/")) return path.replace("/share/", "");
+    return null;
+  });
 
   // Initialize offline storage and load data
   useEffect(() => {
@@ -3522,6 +3903,31 @@ export default function App() {
       default: return <Dashboard state={state} dispatch={dispatch} />;
     }
   };
+
+  // If client portal mode, render the client dashboard
+  if (clientPortalId) {
+    if (state.loading) {
+      return (
+        <div style={{ minHeight: "100vh", background: T.navy[800], display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ textAlign: "center" }}>
+            <Loader2 size={48} style={{ color: T.orange[500], margin: "0 auto 16px", animation: "spin 1s linear infinite" }} />
+            <p style={{ fontSize: "16px", color: T.white, fontWeight: 600 }}>Loading project...</p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <ErrorBoundary>
+        <style>{globalCSS}</style>
+        <ClientPortal
+          projectId={clientPortalId}
+          projects={state.projects}
+          dailyReports={state.dailyReports}
+          weeklyReports={state.weeklyReports}
+        />
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary>
