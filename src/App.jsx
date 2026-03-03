@@ -3381,20 +3381,48 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
 
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(135deg, ${T.navy[800]} 0%, #0f172a 100%)` }}>
+      {/* Mobile-responsive styles */}
+      <style>{`
+        .cp-header { padding: 20px 32px; }
+        .cp-nav { padding: 16px 32px; }
+        .cp-content { padding: 32px; }
+        .cp-nav-inner { display: flex; gap: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .cp-ai-row { display: flex; gap: 12px; margin-bottom: 12px; }
+        .cp-ai-input { flex: 1; padding: 16px 20px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: white; font-size: 15px; outline: none; font-family: inherit; min-width: 0; }
+        .cp-ai-btn { padding: 16px 28px; border-radius: 10px; border: none; background: ${T.orange[500]}; color: white; font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+        .cp-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 32px; }
+        .cp-milestone-table { display: table; width: 100%; border-collapse: collapse; }
+        .cp-milestone-cards { display: none; }
+        .cp-recent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+        @media (max-width: 768px) {
+          .cp-header { padding: 16px; }
+          .cp-nav { padding: 12px 16px; }
+          .cp-content { padding: 16px; }
+          .cp-ai-row { flex-direction: column; }
+          .cp-ai-btn { justify-content: center; }
+          .cp-stats { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+          .cp-milestone-table { display: none; }
+          .cp-milestone-cards { display: block; }
+          .cp-recent-grid { grid-template-columns: 1fr; gap: 16px; }
+          .cp-header-title { font-size: 22px !important; }
+          .cp-quick-btns button { font-size: 11px !important; padding: 5px 10px !important; }
+        }
+      `}</style>
+
       {/* Header */}
-      <div style={{ background: "rgba(0,0,0,0.2)", borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "20px 32px" }}>
+      <div className="cp-header" style={{ background: "rgba(0,0,0,0.2)", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ maxWidth: "1200px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "4px" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "4px", flexWrap: "wrap" }}>
               <span style={{ background: T.orange[500], color: T.white, padding: "4px 12px", borderRadius: "20px", fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                 Client Portal
               </span>
               <span style={{ color: T.navy[400], fontSize: "13px" }}>JOB #{project.jobNumber}</span>
             </div>
-            <h1 style={{ fontSize: "28px", fontWeight: 800, color: T.white, letterSpacing: "-0.02em" }}>{project.jobName}</h1>
+            <h1 className="cp-header-title" style={{ fontSize: "28px", fontWeight: 800, color: T.white, letterSpacing: "-0.02em" }}>{project.jobName}</h1>
             <p style={{ fontSize: "14px", color: T.navy[400], marginTop: "4px" }}>{project.client}</p>
           </div>
-          <div style={{ textAlign: "right" }}>
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
             <div style={{ fontSize: "12px", color: T.navy[400], marginBottom: "4px" }}>Powered by</div>
             <div style={{ fontSize: "24px", fontWeight: 700, color: T.white, fontFamily: "Georgia, serif" }}>BIC</div>
           </div>
@@ -3402,8 +3430,8 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
       </div>
 
       {/* Navigation */}
-      <div style={{ background: "rgba(0,0,0,0.1)", padding: "16px 32px" }}>
-        <div style={{ maxWidth: "1200px", margin: "0 auto", display: "flex", gap: "12px" }}>
+      <div className="cp-nav" style={{ background: "rgba(0,0,0,0.1)" }}>
+        <div className="cp-nav-inner" style={{ maxWidth: "1200px", margin: "0 auto" }}>
           <TabBtn id="overview" label="Overview" icon={LayoutDashboard} />
           <TabBtn id="reports" label="Daily Reports" icon={ClipboardEdit} />
           <TabBtn id="weekly" label="Weekly Reports" icon={CalendarRange} />
@@ -3412,7 +3440,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
       </div>
 
       {/* Content */}
-      <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "32px" }}>
+      <div className="cp-content" style={{ maxWidth: "1200px", margin: "0 auto" }}>
 
         {/* Overview Tab */}
         {activeTab === "overview" && (
@@ -3428,29 +3456,23 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                   <p style={{ fontSize: "13px", color: T.navy[400], margin: 0 }}>Get instant answers about progress, timelines, workforce, delays, and more</p>
                 </div>
               </div>
-              <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
+              <div className="cp-ai-row">
                 <input
                   type="text"
+                  className="cp-ai-input"
                   value={question}
                   onChange={e => setQuestion(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && handleAskQuestion()}
-                  placeholder="e.g., What work was completed this week? Any delays?"
-                  style={{
-                    flex: 1, padding: "16px 20px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.2)",
-                    background: "rgba(0,0,0,0.3)", color: T.white, fontSize: "15px", outline: "none", fontFamily: T.font,
-                  }}
+                  placeholder="e.g., What work was completed this week?"
                 />
-                <button onClick={handleAskQuestion} disabled={loading || !question.trim()} style={{
-                  padding: "16px 28px", borderRadius: "10px", border: "none",
-                  background: T.orange[500], color: T.white, fontWeight: 600, fontSize: "15px",
+                <button className="cp-ai-btn" onClick={handleAskQuestion} disabled={loading || !question.trim()} style={{
                   cursor: loading ? "wait" : "pointer", opacity: loading || !question.trim() ? 0.6 : 1,
-                  display: "flex", alignItems: "center", gap: "8px",
                 }}>
                   {loading ? <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> : <Search size={18} />}
                   {loading ? "Thinking..." : "Ask"}
                 </button>
               </div>
-              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              <div className="cp-quick-btns" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                 {["What work was done this week?", "Any delays or issues?", "Total labor hours?", "Milestone status?"].map(q => (
                   <button key={q} onClick={() => setQuestion(q)} style={{
                     padding: "6px 14px", borderRadius: "20px", border: "1px solid rgba(255,255,255,0.2)",
@@ -3465,71 +3487,108 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
               )}
             </div>
 
-            {/* Project Milestones Table */}
+            {/* Project Milestones */}
             <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "24px", marginBottom: "32px" }}>
               <h3 style={{ fontSize: "18px", fontWeight: 700, color: T.white, marginBottom: "20px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <CircleDot size={20} style={{ color: T.orange[500] }} /> Project Milestones
               </h3>
               {project.milestones?.length > 0 ? (
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom: "2px solid rgba(255,255,255,0.1)" }}>
-                      <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Milestone</th>
-                      <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Target Date</th>
-                      <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Completed</th>
-                      <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <>
+                  {/* Desktop Table */}
+                  <table className="cp-milestone-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "2px solid rgba(255,255,255,0.1)" }}>
+                        <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Milestone</th>
+                        <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Target</th>
+                        <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Completed</th>
+                        <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {project.milestones.map((m, i) => {
+                        const isComplete = !!m.actualDate;
+                        const targetDate = m.targetDate ? new Date(m.targetDate) : null;
+                        const actualDate = m.actualDate ? new Date(m.actualDate) : null;
+                        const isLate = actualDate && targetDate && actualDate > targetDate;
+                        const isPastDue = !isComplete && targetDate && targetDate < new Date();
+                        return (
+                          <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                            <td style={{ padding: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
+                              {isComplete ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
+                              <span style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{m.description}</span>
+                            </td>
+                            <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.navy[400] }}>
+                              {m.targetDate ? fmtDateShort(m.targetDate) : "—"}
+                            </td>
+                            <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: isComplete ? "#4ade80" : T.navy[500] }}>
+                              {m.actualDate ? fmtDateShort(m.actualDate) : "—"}
+                            </td>
+                            <td style={{ padding: "16px", textAlign: "center" }}>
+                              {isComplete ? (
+                                <span style={{ background: isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)", color: isLate ? "#fbbf24" : "#4ade80", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>
+                                  {isLate ? "Completed Late" : "Complete"}
+                                </span>
+                              ) : isPastDue ? (
+                                <span style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Past Due</span>
+                              ) : (
+                                <span style={{ background: "rgba(255,255,255,0.1)", color: T.navy[400], padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Pending</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {/* Mobile Cards */}
+                  <div className="cp-milestone-cards">
                     {project.milestones.map((m, i) => {
                       const isComplete = !!m.actualDate;
                       const targetDate = m.targetDate ? new Date(m.targetDate) : null;
                       const actualDate = m.actualDate ? new Date(m.actualDate) : null;
                       const isLate = actualDate && targetDate && actualDate > targetDate;
                       const isPastDue = !isComplete && targetDate && targetDate < new Date();
+                      const statusBg = isComplete ? (isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)") : isPastDue ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.1)";
+                      const statusColor = isComplete ? (isLate ? "#fbbf24" : "#4ade80") : isPastDue ? "#ef4444" : T.navy[400];
+                      const statusText = isComplete ? (isLate ? "Completed Late" : "Complete") : isPastDue ? "Past Due" : "Pending";
                       return (
-                        <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                          <td style={{ padding: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
-                            {isComplete ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
-                            <span style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{m.description}</span>
-                          </td>
-                          <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.navy[400] }}>
-                            {m.targetDate ? fmtDateShort(m.targetDate) : "—"}
-                          </td>
-                          <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: isComplete ? "#4ade80" : T.navy[500] }}>
-                            {m.actualDate ? fmtDateShort(m.actualDate) : "—"}
-                          </td>
-                          <td style={{ padding: "16px", textAlign: "center" }}>
-                            {isComplete ? (
-                              <span style={{ background: isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)", color: isLate ? "#fbbf24" : "#4ade80", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>
-                                {isLate ? "Completed Late" : "Complete"}
-                              </span>
-                            ) : isPastDue ? (
-                              <span style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Past Due</span>
-                            ) : (
-                              <span style={{ background: "rgba(255,255,255,0.1)", color: T.navy[400], padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Pending</span>
-                            )}
-                          </td>
-                        </tr>
+                        <div key={i} style={{ background: "rgba(0,0,0,0.2)", borderRadius: "12px", padding: "16px", marginBottom: "12px" }}>
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", marginBottom: "12px" }}>
+                            {isComplete ? <CheckCircle2 size={22} style={{ color: "#4ade80", flexShrink: 0, marginTop: "2px" }} /> : <Circle size={22} style={{ color: T.navy[500], flexShrink: 0, marginTop: "2px" }} />}
+                            <div style={{ flex: 1 }}>
+                              <div style={{ color: T.white, fontWeight: 600, fontSize: "15px", marginBottom: "8px" }}>{m.description}</div>
+                              <span style={{ background: statusBg, color: statusColor, padding: "4px 12px", borderRadius: "20px", fontSize: "11px", fontWeight: 600 }}>{statusText}</span>
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: "20px", paddingLeft: "34px" }}>
+                            <div>
+                              <div style={{ fontSize: "10px", color: T.navy[500], textTransform: "uppercase", marginBottom: "2px" }}>Target</div>
+                              <div style={{ fontSize: "13px", color: T.navy[400] }}>{m.targetDate ? fmtDateShort(m.targetDate) : "—"}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: "10px", color: T.navy[500], textTransform: "uppercase", marginBottom: "2px" }}>Completed</div>
+                              <div style={{ fontSize: "13px", color: isComplete ? "#4ade80" : T.navy[500] }}>{m.actualDate ? fmtDateShort(m.actualDate) : "—"}</div>
+                            </div>
+                          </div>
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
+                  </div>
+                </>
               ) : (
                 <p style={{ color: T.navy[400], textAlign: "center", padding: "20px" }}>No milestones defined for this project.</p>
               )}
             </div>
 
             {/* Stats Row */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "20px", marginBottom: "32px" }}>
+            <div className="cp-stats">
               <StatCard label="Daily Reports" value={totalDays} icon={ClipboardEdit} />
-              <StatCard label="Total Workforce Hours" value={totalWorkforceHours.toLocaleString()} icon={Users} color={T.navy[600]} />
-              <StatCard label="Milestones Complete" value={`${completedMilestones}/${totalMilestones}`} icon={CheckCircle2} color="#059669" />
-              <StatCard label="Progress Photos" value={allPhotos.length} icon={Camera} color="#7c3aed" />
+              <StatCard label="Workforce Hours" value={totalWorkforceHours.toLocaleString()} icon={Users} color={T.navy[600]} />
+              <StatCard label="Milestones" value={`${completedMilestones}/${totalMilestones}`} icon={CheckCircle2} color="#059669" />
+              <StatCard label="Photos" value={allPhotos.length} icon={Camera} color="#7c3aed" />
             </div>
 
             {/* Recent Activity */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+            <div className="cp-recent-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
               <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px" }}>
                 <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.white, marginBottom: "16px" }}>Recent Reports</h3>
                 {projectDailies.slice(0, 5).map((r, i) => (
