@@ -3491,7 +3491,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                         <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                           <td style={{ padding: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
                             {isComplete ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
-                            <span style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{m.name}</span>
+                            <span style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{m.description}</span>
                           </td>
                           <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.navy[400] }}>
                             {m.targetDate ? fmtDateShort(m.targetDate) : "—"}
