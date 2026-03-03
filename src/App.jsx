@@ -1052,6 +1052,7 @@ const newProjectTemplate = () => ({
   equipmentOwned: [],
   equipmentRented: [],
   safetyMeetings: [], // { topicId, date, attendeeCount }
+  safetyDownloads: [], // [topicId, topicId, ...] - downloaded topic IDs
 });
 
 // ─── State Reducer ───────────────────────────────────────────
@@ -1114,6 +1115,11 @@ function reducer(state, action) {
       // Don't add duplicate meetings for same topic
       if (existing.some(m => m.topicId === action.data.topicId)) return state;
       return updateActiveProject({ safetyMeetings: [...existing, action.data] });
+    }
+    case "DOWNLOAD_SAFETY_TOPIC": {
+      const downloads = project.safetyDownloads || [];
+      if (downloads.includes(action.topicId)) return state;
+      return updateActiveProject({ safetyDownloads: [...downloads, action.topicId] });
     }
     case "ADD_EQUIPMENT_OWNED": return updateActiveProject({ equipmentOwned: [...project.equipmentOwned, { id: `e${Date.now()}`, description: "" }] });
     case "ADD_EQUIPMENT_RENTED": return updateActiveProject({ equipmentRented: [...project.equipmentRented, { id: `r${Date.now()}`, description: "", vendor: "" }] });

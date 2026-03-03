@@ -727,11 +727,25 @@ export default function SafetyMeetings({ state, dispatch }) {
   const activeProject = state.projects?.find(p => p.id === state.activeProjectId);
   const currentProject = activeProject?.jobName || "No Project Selected";
 
-  // State
+  // Initialize downloaded/presented from persisted project state
+  const initDownloaded = () => {
+    const downloads = activeProject?.safetyDownloads || [];
+    const obj = {};
+    downloads.forEach(id => { obj[id] = true; });
+    return obj;
+  };
+  const initPresented = () => {
+    const meetings = activeProject?.safetyMeetings || [];
+    const obj = {};
+    meetings.forEach(m => { obj[m.topicId] = { date: m.date, project: currentProject }; });
+    return obj;
+  };
+
+  // State - initialized from project data
   const [screen, setScreen] = useState("topics");
   const [selectedTopic, setSelectedTopic] = useState(null);
-  const [downloaded, setDownloaded] = useState({});
-  const [presented, setPresented] = useState({});
+  const [downloaded, setDownloaded] = useState(initDownloaded);
+  const [presented, setPresented] = useState(initPresented);
   const [meetings, setMeetings] = useState({});
   const [activeMeeting, setActiveMeeting] = useState(null);
   const [showSigPad, setShowSigPad] = useState(false);
@@ -741,6 +755,12 @@ export default function SafetyMeetings({ state, dispatch }) {
   const [isOnline, setIsOnline] = useState(true);
   const [showToast, setShowToast] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+
+  // Sync local state when project data changes
+  useEffect(() => {
+    setDownloaded(initDownloaded());
+    setPresented(initPresented());
+  }, [activeProject?.safetyDownloads, activeProject?.safetyMeetings]);
 
   const toast = useCallback((msg, type = "success") => {
     setShowToast({ msg, type });
@@ -1016,37 +1036,46 @@ export default function SafetyMeetings({ state, dispatch }) {
             </div>
           )}
 
-          {/* Action buttons */}
+          {/* Action buttons - Step 1: Download, Step 2: Present */}
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {!isDL && (
-              <button onClick={() => {
-                if (!isOnline) { toast("No internet connection — cannot download", "error"); return; }
-                setDownloaded(d => ({ ...d, [t.id]: true }));
-                toast("Topic downloaded for offline use");
-              }}
-                style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 700, border: "none",
-                  borderRadius: 14, background: "#1a3a5c", color: "#fff", cursor: "pointer",
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                <Download size={18} /> Download for Offline
-              </button>
-            )}
-
+            {/* Step 1: Download */}
             <button onClick={() => {
-              if (!isDL && !isOnline) { toast("Download this topic first while online", "error"); return; }
-              if (!isDL) setDownloaded(d => ({ ...d, [t.id]: true }));
+              if (isDL) return; // Already downloaded
+              if (!isOnline) { toast("No internet connection — cannot download", "error"); return; }
+              setDownloaded(d => ({ ...d, [t.id]: true }));
+              dispatch({ type: "DOWNLOAD_SAFETY_TOPIC", topicId: t.id });
+              toast("Step 1 complete — Topic downloaded");
+            }}
+              style={{
+                width: "100%", padding: "14px", fontSize: 15, fontWeight: 700, border: "none",
+                borderRadius: 14, cursor: isDL ? "default" : "pointer",
+                background: isDL ? "#166534" : "#1a3a5c", color: "#fff",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                opacity: isDL ? 1 : 1,
+              }}>
+              {isDL ? <Check size={18} /> : <Download size={18} />}
+              {isDL ? "Step 1: Downloaded ✓" : "Step 1: Download for Offline"}
+            </button>
+
+            {/* Step 2: Present (only enabled after download) */}
+            <button onClick={() => {
+              if (!isDL) { toast("Complete Step 1 first — Download the topic", "error"); return; }
               const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
               setActiveMeeting({ topicId: t.id, date: today, project: currentProject, signatures: existingMeeting?.signatures || [] });
               setScreen("present");
             }}
+              disabled={!isDL}
               style={{
                 width: "100%", padding: "14px", fontSize: 15, fontWeight: 700, border: "none",
-                borderRadius: 14, cursor: "pointer",
-                background: "linear-gradient(135deg, #e87722, #d4650f)", color: "#fff",
+                borderRadius: 14, cursor: isDL ? "pointer" : "not-allowed",
+                background: isPres ? "#166534" : isDL ? "linear-gradient(135deg, #e87722, #d4650f)" : "#94a3b8",
+                color: "#fff",
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                boxShadow: "0 4px 16px rgba(232,119,34,0.3)",
+                boxShadow: isDL && !isPres ? "0 4px 16px rgba(232,119,34,0.3)" : "none",
+                opacity: isDL ? 1 : 0.6,
               }}>
-              <Edit3 size={18} />
-              {existingMeeting ? "Continue Meeting / Add Signatures" : "Download & Present"}
+              {isPres ? <Check size={18} /> : <Edit3 size={18} />}
+              {isPres ? "Step 2: Presented ✓" : existingMeeting ? "Step 2: Continue Meeting" : "Step 2: Present & Collect Signatures"}
             </button>
           </div>
         </div>
@@ -1202,6 +1231,15 @@ export default function SafetyMeetings({ state, dispatch }) {
                 date: activeMeeting.date, project: activeMeeting.project, signatures: activeMeeting.signatures
               }}));
               setPresented(p => ({ ...p, [activeMeeting.topicId]: { date: activeMeeting.date, project: activeMeeting.project } }));
+              // Persist to parent state
+              dispatch({
+                type: "ADD_SAFETY_MEETING",
+                data: {
+                  topicId: activeMeeting.topicId,
+                  date: activeMeeting.date,
+                  attendeeCount: activeMeeting.signatures.length
+                }
+              });
               toast("Meeting auto-saved");
             }
             setScreen("view");
