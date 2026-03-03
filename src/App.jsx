@@ -3408,7 +3408,6 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
           <TabBtn id="reports" label="Daily Reports" icon={ClipboardEdit} />
           <TabBtn id="weekly" label="Weekly Reports" icon={CalendarRange} />
           <TabBtn id="photos" label="Photos" icon={Image} />
-          <TabBtn id="ask" label="Ask AI" icon={Sparkles} />
         </div>
       </div>
 
@@ -3418,36 +3417,116 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
         {/* Overview Tab */}
         {activeTab === "overview" && (
           <div className="fade-in">
+            {/* AI Search Bar - Hero */}
+            <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "32px", marginBottom: "32px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                <div style={{ background: T.orange[500], padding: "10px", borderRadius: "12px" }}>
+                  <Sparkles size={24} style={{ color: T.white }} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: "20px", fontWeight: 700, color: T.white, margin: 0 }}>Ask About This Project</h2>
+                  <p style={{ fontSize: "13px", color: T.navy[400], margin: 0 }}>Get instant answers about progress, timelines, workforce, delays, and more</p>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
+                <input
+                  type="text"
+                  value={question}
+                  onChange={e => setQuestion(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleAskQuestion()}
+                  placeholder="e.g., What work was completed this week? Any delays?"
+                  style={{
+                    flex: 1, padding: "16px 20px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.2)",
+                    background: "rgba(0,0,0,0.3)", color: T.white, fontSize: "15px", outline: "none", fontFamily: T.font,
+                  }}
+                />
+                <button onClick={handleAskQuestion} disabled={loading || !question.trim()} style={{
+                  padding: "16px 28px", borderRadius: "10px", border: "none",
+                  background: T.orange[500], color: T.white, fontWeight: 600, fontSize: "15px",
+                  cursor: loading ? "wait" : "pointer", opacity: loading || !question.trim() ? 0.6 : 1,
+                  display: "flex", alignItems: "center", gap: "8px",
+                }}>
+                  {loading ? <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> : <Search size={18} />}
+                  {loading ? "Thinking..." : "Ask"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {["What work was done this week?", "Any delays or issues?", "Total labor hours?", "Milestone status?"].map(q => (
+                  <button key={q} onClick={() => setQuestion(q)} style={{
+                    padding: "6px 14px", borderRadius: "20px", border: "1px solid rgba(255,255,255,0.2)",
+                    background: "transparent", color: T.navy[400], fontSize: "12px", cursor: "pointer",
+                  }}>{q}</button>
+                ))}
+              </div>
+              {answer && (
+                <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: "10px", padding: "20px", marginTop: "16px", borderLeft: `4px solid ${T.orange[500]}` }}>
+                  <div style={{ fontSize: "15px", color: T.white, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{answer}</div>
+                </div>
+              )}
+            </div>
+
+            {/* Project Milestones Table */}
+            <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "24px", marginBottom: "32px" }}>
+              <h3 style={{ fontSize: "18px", fontWeight: 700, color: T.white, marginBottom: "20px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <CircleDot size={20} style={{ color: T.orange[500] }} /> Project Milestones
+              </h3>
+              {project.milestones?.length > 0 ? (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "2px solid rgba(255,255,255,0.1)" }}>
+                      <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Milestone</th>
+                      <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Target Date</th>
+                      <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Completed</th>
+                      <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {project.milestones.map((m, i) => {
+                      const isComplete = !!m.actualDate;
+                      const targetDate = m.targetDate ? new Date(m.targetDate) : null;
+                      const actualDate = m.actualDate ? new Date(m.actualDate) : null;
+                      const isLate = actualDate && targetDate && actualDate > targetDate;
+                      const isPastDue = !isComplete && targetDate && targetDate < new Date();
+                      return (
+                        <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                          <td style={{ padding: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
+                            {isComplete ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
+                            <span style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{m.name}</span>
+                          </td>
+                          <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.navy[400] }}>
+                            {m.targetDate ? fmtDateShort(m.targetDate) : "—"}
+                          </td>
+                          <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: isComplete ? "#4ade80" : T.navy[500] }}>
+                            {m.actualDate ? fmtDateShort(m.actualDate) : "—"}
+                          </td>
+                          <td style={{ padding: "16px", textAlign: "center" }}>
+                            {isComplete ? (
+                              <span style={{ background: isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)", color: isLate ? "#fbbf24" : "#4ade80", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>
+                                {isLate ? "Completed Late" : "Complete"}
+                              </span>
+                            ) : isPastDue ? (
+                              <span style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Past Due</span>
+                            ) : (
+                              <span style={{ background: "rgba(255,255,255,0.1)", color: T.navy[400], padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Pending</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <p style={{ color: T.navy[400], textAlign: "center", padding: "20px" }}>No milestones defined for this project.</p>
+              )}
+            </div>
+
+            {/* Stats Row */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "20px", marginBottom: "32px" }}>
               <StatCard label="Daily Reports" value={totalDays} icon={ClipboardEdit} />
               <StatCard label="Total Workforce Hours" value={totalWorkforceHours.toLocaleString()} icon={Users} color={T.navy[600]} />
               <StatCard label="Milestones Complete" value={`${completedMilestones}/${totalMilestones}`} icon={CheckCircle2} color="#059669" />
               <StatCard label="Progress Photos" value={allPhotos.length} icon={Camera} color="#7c3aed" />
             </div>
-
-            {/* Milestones */}
-            {project.milestones?.length > 0 && (
-              <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px", marginBottom: "24px" }}>
-                <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.white, marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <CircleDot size={18} style={{ color: T.orange[500] }} /> Project Milestones
-                </h3>
-                <div style={{ display: "grid", gap: "12px" }}>
-                  {project.milestones.map((m, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "rgba(0,0,0,0.2)", borderRadius: "8px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                        {m.actualDate ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
-                        <span style={{ color: T.white, fontWeight: 500 }}>{m.name}</span>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: "13px", color: m.actualDate ? "#4ade80" : T.navy[400] }}>
-                          {m.actualDate ? `Completed ${fmtDateShort(m.actualDate)}` : `Target: ${fmtDateShort(m.targetDate)}`}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Recent Activity */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
@@ -3462,9 +3541,10 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                     {r.delaysProblems && <span style={{ background: "#dc2626", color: T.white, padding: "2px 8px", borderRadius: "4px", fontSize: "10px", fontWeight: 600 }}>DELAY</span>}
                   </div>
                 ))}
+                {projectDailies.length === 0 && <p style={{ color: T.navy[400], fontSize: "13px" }}>No reports yet.</p>}
               </div>
 
-              {recentDelays.length > 0 && (
+              {recentDelays.length > 0 ? (
                 <div style={{ background: "rgba(220,38,38,0.1)", border: "1px solid rgba(220,38,38,0.3)", borderRadius: "12px", padding: "24px" }}>
                   <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#fca5a5", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
                     <AlertTriangle size={18} /> Recent Issues
@@ -3475,6 +3555,13 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                       <div style={{ fontSize: "13px", color: T.white }}>{d.issue}</div>
                     </div>
                   ))}
+                </div>
+              ) : (
+                <div style={{ background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.3)", borderRadius: "12px", padding: "24px" }}>
+                  <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#4ade80", marginBottom: "8px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <CheckCircle2 size={18} /> No Recent Issues
+                  </h3>
+                  <p style={{ fontSize: "13px", color: T.navy[400] }}>No delays or problems reported in the last 7 days.</p>
                 </div>
               )}
             </div>
@@ -3567,61 +3654,6 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
           </div>
         )}
 
-        {/* Ask AI Tab */}
-        {activeTab === "ask" && (
-          <div className="fade-in">
-            <div style={{ maxWidth: "700px", margin: "0 auto" }}>
-              <div style={{ textAlign: "center", marginBottom: "32px" }}>
-                <div style={{ background: T.orange[500], width: "64px", height: "64px", borderRadius: "16px", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
-                  <Sparkles size={32} style={{ color: T.white }} />
-                </div>
-                <h2 style={{ fontSize: "24px", fontWeight: 700, color: T.white, marginBottom: "8px" }}>Ask About This Project</h2>
-                <p style={{ fontSize: "14px", color: T.navy[400] }}>Get instant answers about progress, timelines, issues, and more.</p>
-              </div>
-
-              <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px" }}>
-                <div style={{ display: "flex", gap: "12px", marginBottom: "16px" }}>
-                  <input
-                    type="text"
-                    value={question}
-                    onChange={e => setQuestion(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && handleAskQuestion()}
-                    placeholder="e.g., What caused the delays last week?"
-                    style={{
-                      flex: 1, padding: "14px 18px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.2)",
-                      background: "rgba(0,0,0,0.2)", color: T.white, fontSize: "15px", outline: "none", fontFamily: T.font,
-                    }}
-                  />
-                  <button onClick={handleAskQuestion} disabled={loading || !question.trim()} style={{
-                    padding: "14px 24px", borderRadius: "8px", border: "none",
-                    background: T.orange[500], color: T.white, fontWeight: 600, fontSize: "15px",
-                    cursor: loading ? "wait" : "pointer", opacity: loading || !question.trim() ? 0.6 : 1,
-                    display: "flex", alignItems: "center", gap: "8px",
-                  }}>
-                    {loading ? <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> : <Search size={18} />}
-                    {loading ? "Thinking..." : "Ask"}
-                  </button>
-                </div>
-
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" }}>
-                  {["What work was done this week?", "Any delays or issues?", "How many labor hours total?", "What's the milestone status?"].map(q => (
-                    <button key={q} onClick={() => setQuestion(q)} style={{
-                      padding: "6px 12px", borderRadius: "20px", border: "1px solid rgba(255,255,255,0.2)",
-                      background: "transparent", color: T.navy[400], fontSize: "12px", cursor: "pointer",
-                    }}>{q}</button>
-                  ))}
-                </div>
-
-                {answer && (
-                  <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "8px", padding: "20px", marginTop: "16px" }}>
-                    <div style={{ fontSize: "11px", color: T.orange[500], fontWeight: 600, marginBottom: "8px" }}>AI RESPONSE</div>
-                    <div style={{ fontSize: "15px", color: T.white, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{answer}</div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Footer */}
