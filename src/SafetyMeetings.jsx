@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Shield, Download, Check, ChevronLeft, Eye, Edit3, Users, Clock, Search, WifiOff, Plus, Save, Trash2, Filter } from "lucide-react";
 
 // ─── DATA ───────────────────────────────────────────────────────────
-const TOPICS = [
+// Exported for use in ClientPortal
+export const SAFETY_TOPICS = [
   {
     id: 1,
     week: 1,
@@ -578,8 +579,9 @@ const TOPICS = [
 ];
 
 
-const CATEGORIES = [...new Set(TOPICS.map(t => t.category))];
-const CAT_COLORS = {
+const TOPICS = SAFETY_TOPICS; // Local alias
+const CATEGORIES = [...new Set(SAFETY_TOPICS.map(t => t.category))];
+export const CAT_COLORS = {
   "Excavation Safety": { bg: "#fef3c7", text: "#92400e", dot: "#f59e0b" },
   "Shoring Operations": { bg: "#dbeafe", text: "#1e40af", dot: "#3b82f6" },
   "Pile Driving Safety": { bg: "#fce7f3", text: "#9d174d", dot: "#ec4899" },
@@ -1178,6 +1180,15 @@ export default function SafetyMeetings({ state, dispatch }) {
         date: activeMeeting.date, project: activeMeeting.project, signatures: activeMeeting.signatures
       }}));
       setPresented(p => ({ ...p, [activeMeeting.topicId]: { date: activeMeeting.date, project: activeMeeting.project } }));
+      // Persist to parent state for Supabase sync
+      dispatch({
+        type: "ADD_SAFETY_MEETING",
+        data: {
+          topicId: activeMeeting.topicId,
+          date: activeMeeting.date,
+          attendeeCount: activeMeeting.signatures.length
+        }
+      });
       toast(`Meeting saved with ${activeMeeting.signatures.length} signatures`);
       setScreen("topics");
     };

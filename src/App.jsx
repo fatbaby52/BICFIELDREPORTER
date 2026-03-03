@@ -2,7 +2,7 @@ import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } 
 import * as lucide from "lucide-react";
 import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
-import SafetyMeetings from './SafetyMeetings';
+import SafetyMeetings, { SAFETY_TOPICS, CAT_COLORS } from './SafetyMeetings';
 import heic2any from 'heic2any';
 
 const {
@@ -1051,6 +1051,7 @@ const newProjectTemplate = () => ({
   milestones: [],
   equipmentOwned: [],
   equipmentRented: [],
+  safetyMeetings: [], // { topicId, date, attendeeCount }
 });
 
 // ─── State Reducer ───────────────────────────────────────────
@@ -1108,6 +1109,12 @@ function reducer(state, action) {
     case "ADD_MILESTONE": return updateActiveProject({ milestones: [...project.milestones, { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "" }] });
     case "UPDATE_MILESTONE": return updateActiveProject({ milestones: project.milestones.map(m => m.id === action.id ? { ...m, ...action.data } : m) });
     case "REMOVE_MILESTONE": return updateActiveProject({ milestones: project.milestones.filter(m => m.id !== action.id) });
+    case "ADD_SAFETY_MEETING": {
+      const existing = project.safetyMeetings || [];
+      // Don't add duplicate meetings for same topic
+      if (existing.some(m => m.topicId === action.data.topicId)) return state;
+      return updateActiveProject({ safetyMeetings: [...existing, action.data] });
+    }
     case "ADD_EQUIPMENT_OWNED": return updateActiveProject({ equipmentOwned: [...project.equipmentOwned, { id: `e${Date.now()}`, description: "" }] });
     case "ADD_EQUIPMENT_RENTED": return updateActiveProject({ equipmentRented: [...project.equipmentRented, { id: `r${Date.now()}`, description: "", vendor: "" }] });
     case "UPDATE_EQUIPMENT_OWNED": return updateActiveProject({ equipmentOwned: project.equipmentOwned.map(e => e.id === action.id ? { ...e, ...action.data } : e) });
@@ -3436,6 +3443,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
           <TabBtn id="reports" label="Daily Reports" icon={ClipboardEdit} />
           <TabBtn id="weekly" label="Weekly Reports" icon={CalendarRange} />
           <TabBtn id="photos" label="Photos" icon={Image} />
+          <TabBtn id="safety" label="Safety" icon={Shield} />
         </div>
       </div>
 
@@ -3709,6 +3717,131 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                 </div>
               ))}
               {allPhotos.length === 0 && <p style={{ color: T.navy[400], textAlign: "center", padding: "40px", gridColumn: "1/-1" }}>No photos yet.</p>}
+            </div>
+          </div>
+        )}
+
+        {/* Safety Tab */}
+        {activeTab === "safety" && (
+          <div className="fade-in">
+            <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "24px", marginBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
+                <div style={{ background: "rgba(34,197,94,0.2)", padding: "12px", borderRadius: "12px" }}>
+                  <Shield size={28} style={{ color: "#22c55e" }} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: "22px", fontWeight: 700, color: T.white, margin: 0 }}>Safety Briefings</h2>
+                  <p style={{ fontSize: "13px", color: T.navy[400], margin: 0 }}>Weekly safety topics covered on this project</p>
+                </div>
+              </div>
+
+              {(project.safetyMeetings?.length > 0) ? (
+                <>
+                  {/* Desktop Table */}
+                  <table className="cp-milestone-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "2px solid rgba(255,255,255,0.1)" }}>
+                        <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Topic</th>
+                        <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Category</th>
+                        <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Date Covered</th>
+                        <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Attendees</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {project.safetyMeetings.map((meeting, i) => {
+                        const topic = SAFETY_TOPICS.find(t => t.id === meeting.topicId);
+                        if (!topic) return null;
+                        const catColor = CAT_COLORS[topic.category] || { bg: "#f1f5f9", text: "#475569" };
+                        return (
+                          <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                            <td style={{ padding: "16px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                                <CheckCircle2 size={20} style={{ color: "#22c55e", flexShrink: 0 }} />
+                                <div>
+                                  <div style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{topic.title}</div>
+                                  <div style={{ color: T.navy[500], fontSize: "12px" }}>Week {topic.week}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td style={{ padding: "16px" }}>
+                              <span style={{ background: catColor.bg, color: catColor.text, padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600 }}>
+                                {topic.category}
+                              </span>
+                            </td>
+                            <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.navy[400] }}>
+                              {meeting.date}
+                            </td>
+                            <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.white, fontWeight: 600 }}>
+                              {meeting.attendeeCount || "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+
+                  {/* Mobile Cards */}
+                  <div className="cp-milestone-cards">
+                    {project.safetyMeetings.map((meeting, i) => {
+                      const topic = SAFETY_TOPICS.find(t => t.id === meeting.topicId);
+                      if (!topic) return null;
+                      const catColor = CAT_COLORS[topic.category] || { bg: "#f1f5f9", text: "#475569" };
+                      return (
+                        <div key={i} style={{ background: "rgba(0,0,0,0.2)", borderRadius: "12px", padding: "16px", marginBottom: "12px" }}>
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", marginBottom: "12px" }}>
+                            <CheckCircle2 size={22} style={{ color: "#22c55e", flexShrink: 0, marginTop: "2px" }} />
+                            <div style={{ flex: 1 }}>
+                              <div style={{ color: T.white, fontWeight: 600, fontSize: "15px", marginBottom: "4px" }}>{topic.title}</div>
+                              <span style={{ background: catColor.bg, color: catColor.text, padding: "3px 8px", borderRadius: "10px", fontSize: "10px", fontWeight: 600 }}>
+                                {topic.category}
+                              </span>
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: "20px", paddingLeft: "34px" }}>
+                            <div>
+                              <div style={{ fontSize: "10px", color: T.navy[500], textTransform: "uppercase", marginBottom: "2px" }}>Date</div>
+                              <div style={{ fontSize: "13px", color: T.navy[400] }}>{meeting.date}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: "10px", color: T.navy[500], textTransform: "uppercase", marginBottom: "2px" }}>Attendees</div>
+                              <div style={{ fontSize: "13px", color: T.white, fontWeight: 600 }}>{meeting.attendeeCount || "—"}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div style={{ textAlign: "center", padding: "40px 20px" }}>
+                  <Shield size={48} style={{ color: T.navy[600], marginBottom: "16px" }} />
+                  <p style={{ color: T.navy[400], fontSize: "15px", marginBottom: "8px" }}>No safety briefings recorded yet.</p>
+                  <p style={{ color: T.navy[500], fontSize: "13px" }}>Safety meetings will appear here once they are conducted and logged.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Safety Topics Overview */}
+            <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "24px" }}>
+              <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.white, marginBottom: "16px" }}>52-Week Safety Curriculum</h3>
+              <p style={{ fontSize: "13px", color: T.navy[400], marginBottom: "20px" }}>
+                This project follows a comprehensive 52-week safety training program covering excavation safety, shoring operations, fall protection, and more.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "12px" }}>
+                {Object.entries(CAT_COLORS).slice(0, 6).map(([category, colors]) => {
+                  const topicsInCat = SAFETY_TOPICS.filter(t => t.category === category);
+                  const completedInCat = (project.safetyMeetings || []).filter(m => {
+                    const topic = SAFETY_TOPICS.find(t => t.id === m.topicId);
+                    return topic?.category === category;
+                  }).length;
+                  return (
+                    <div key={category} style={{ background: "rgba(0,0,0,0.2)", borderRadius: "10px", padding: "14px", borderLeft: `4px solid ${colors.dot}` }}>
+                      <div style={{ fontSize: "13px", fontWeight: 600, color: T.white, marginBottom: "4px" }}>{category}</div>
+                      <div style={{ fontSize: "12px", color: T.navy[400] }}>{completedInCat}/{topicsInCat.length} topics covered</div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
