@@ -445,6 +445,14 @@ const toISODate = (d) => {
   const day = String(dt.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
+// Check if incident text means "no incident" (N/A, none, etc.)
+const isNoIncident = (text) => {
+  if (!text || typeof text !== 'string') return true;
+  const normalized = text.trim().toLowerCase();
+  return normalized === '' || normalized === 'n/a' || normalized === 'na' ||
+         normalized === 'none' || normalized === 'no' || normalized === 'no incidents' ||
+         normalized === 'no incident' || normalized === '-' || normalized === '—';
+};
 const getWeekEnding = (d) => {
   const dt = parseLocalDate(d) || new Date(d);
   const day = dt.getDay();
@@ -738,7 +746,8 @@ const exportWeeklyPDF = (weekly, project) => {
   .milestone-table td{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.05);color:#c9d1e0}
   .milestone-table tr:last-child td{border-bottom:none}
   .milestone-table .complete{color:#4ade80;font-weight:600}
-  .milestone-table .pending{color:#e8853a}
+  .milestone-table .in-progress{color:#fbbf24;font-weight:600}
+  .milestone-table .pending{color:#94a3b8}
   .milestone-legend{font-size:10px;color:#6b7280;margin-top:8px;font-style:italic}
 
   /* Info Row */
@@ -838,7 +847,8 @@ const exportWeeklyPDF = (weekly, project) => {
     .milestone-table td{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.05);color:#c9d1e0!important}
     .milestone-table tr:last-child td{border-bottom:none}
     .milestone-table .complete{color:#4ade80!important;font-weight:600}
-    .milestone-table .pending{color:#e8853a!important}
+    .milestone-table .in-progress{color:#fbbf24!important;font-weight:600}
+    .milestone-table .pending{color:#94a3b8!important}
     .milestone-legend{color:#6b7280!important;font-size:10px;font-style:italic;margin-top:8px}
 
     /* Green/red accent colors */
@@ -923,8 +933,13 @@ const exportWeeklyPDF = (weekly, project) => {
     <div class="panel milestone-section">
       <div class="panel-title white">Milestone Tracking</div>
       <table class="milestone-table">
-        <tr><th scope="col">Description</th><th scope="col">Milestone</th><th scope="col">Target</th><th scope="col">Actual</th></tr>
-        ${project.milestones.map(m => `<tr><td class="${m.actualDate ? "complete" : "pending"}">${m.description}</td><td>${fmtD(m.milestoneDate)}</td><td>${fmtD(m.targetDate)}</td><td class="${m.actualDate ? "complete" : ""}">${fmtD(m.actualDate) || "—"}</td></tr>`).join("") || '<tr><td colspan="4" style="text-align:center;color:#6b7280">No milestones defined</td></tr>'}
+        <tr><th scope="col">Description</th><th scope="col">Milestone</th><th scope="col">Target</th><th scope="col">Status</th></tr>
+        ${project.milestones.map(m => {
+          const status = m.status || (m.actualDate ? "complete" : "not_started");
+          const statusLabel = status === "complete" ? "Complete" : status === "in_progress" ? "In Progress" : "Not Started";
+          const statusClass = status === "complete" ? "complete" : status === "in_progress" ? "in-progress" : "pending";
+          return `<tr><td class="${statusClass}">${m.description}</td><td>${fmtD(m.milestoneDate)}</td><td>${fmtD(m.targetDate)}</td><td class="${statusClass}">${statusLabel}</td></tr>`;
+        }).join("") || '<tr><td colspan="4" style="text-align:center;color:#6b7280">No milestones defined</td></tr>'}
       </table>
       <div class="milestone-legend">Milestone = Owner Contract Schedule | Target = Sub OPS Schedule | Actual = Work Completed</div>
     </div>
@@ -1024,7 +1039,7 @@ const aggregateWeeklyData = (weekReports, project) => {
   const uniqueOngoing = [...new Set(ongoing)];
   const uniqueDelays = [...new Set(delays)];
 
-  const allIncidents = weekReports.map(r => r.incidents).filter(i => i && i !== "N/A");
+  const allIncidents = weekReports.map(r => r.incidents).filter(i => !isNoIncident(i));
   const safety = allIncidents.length ? allIncidents.join("; ") : "No incidents";
 
   const allPhotos = weekReports.flatMap(r =>
@@ -1107,7 +1122,7 @@ function reducer(state, action) {
       };
     }
     case "SET_PROJECT": return updateActiveProject(action.data);
-    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...project.milestones, { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "" }] });
+    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...project.milestones, { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "", status: "not_started" }] });
     case "UPDATE_MILESTONE": return updateActiveProject({ milestones: project.milestones.map(m => m.id === action.id ? { ...m, ...action.data } : m) });
     case "REMOVE_MILESTONE": return updateActiveProject({ milestones: project.milestones.filter(m => m.id !== action.id) });
     case "ADD_SAFETY_MEETING": {
@@ -1854,7 +1869,7 @@ function Dashboard({ state, dispatch }) {
                 {report.delaysProblems && (
                   <Badge color="red">Delay</Badge>
                 )}
-                {report.incidents && report.incidents !== "N/A" && (
+                {!isNoIncident(report.incidents) && (
                   <Badge color="red">Incident</Badge>
                 )}
               </div>
@@ -1913,20 +1928,31 @@ function Dashboard({ state, dispatch }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
             <thead>
               <tr style={{ background: T.navy[800] }}>
-                {["Description","Milestone","Target","Actual"].map(h => (
+                {["Description","Milestone","Target","Status"].map(h => (
                   <th key={h} scope="col" style={{ padding: "10px 16px", textAlign: "left", color: T.white, fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {project.milestones.map((m, i) => (
-                <tr key={m.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
-                  <td style={{ padding: "10px 16px", fontWeight: 500, color: m.actualDate ? T.green[500] : T.navy[800] }}>{m.description}</td>
-                  <td style={{ padding: "10px 16px", color: T.neutral[500] }}>{fmtDateShort(m.milestoneDate)}</td>
-                  <td style={{ padding: "10px 16px", color: T.neutral[500] }}>{fmtDateShort(m.targetDate)}</td>
-                  <td style={{ padding: "10px 16px", color: m.actualDate ? T.green[500] : T.neutral[300] }}>{fmtDateShort(m.actualDate) || "—"}</td>
-                </tr>
-              ))}
+              {project.milestones.map((m, i) => {
+                const status = m.status || (m.actualDate ? "complete" : "not_started");
+                const statusColors = {
+                  not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Not Started" },
+                  in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
+                  complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
+                };
+                const sc = statusColors[status] || statusColors.not_started;
+                return (
+                  <tr key={m.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
+                    <td style={{ padding: "10px 16px", fontWeight: 500, color: status === "complete" ? T.green[500] : status === "in_progress" ? "#92400e" : T.navy[800] }}>{m.description}</td>
+                    <td style={{ padding: "10px 16px", color: T.neutral[500] }}>{fmtDateShort(m.milestoneDate)}</td>
+                    <td style={{ padding: "10px 16px", color: T.neutral[500] }}>{fmtDateShort(m.targetDate)}</td>
+                    <td style={{ padding: "10px 16px" }}>
+                      <span style={{ padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600, background: sc.bg, color: sc.text }}>{sc.label}</span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </Card>
@@ -1959,28 +1985,41 @@ function ProjectSetup({ state, dispatch }) {
         <SectionTitle icon={CircleDot} action={<Btn icon={Plus} size="sm" onClick={() => dispatch({ type: "ADD_MILESTONE" })}>Add</Btn>}>
           Milestones
         </SectionTitle>
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: "8px", fontSize: "12px", fontWeight: 600, color: T.neutral[500], marginBottom: "8px", padding: "0 4px" }}>
-          <span>Description</span><span>Milestone</span><span>Target</span><span>Actual</span><span></span>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 100px auto", gap: "8px", fontSize: "12px", fontWeight: 600, color: T.neutral[500], marginBottom: "8px", padding: "0 4px" }}>
+          <span>Description</span><span>Milestone</span><span>Target</span><span>Status</span><span></span>
         </div>
-        {project.milestones.map(m => (
-          <div key={m.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: "8px", marginBottom: "6px", alignItems: "center" }}>
-            <input value={m.description} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { description: e.target.value } })}
-              style={{ padding: "8px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
-            />
-            <input type="date" value={m.milestoneDate} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { milestoneDate: e.target.value } })}
-              style={{ padding: "8px 6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
-            />
-            <input type="date" value={m.targetDate} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { targetDate: e.target.value } })}
-              style={{ padding: "8px 6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
-            />
-            <input type="date" value={m.actualDate} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { actualDate: e.target.value } })}
-              style={{ padding: "8px 6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
-            />
-            <button onClick={() => dispatch({ type: "REMOVE_MILESTONE", id: m.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px", color: T.neutral[400] }}>
-              <Trash2 size={16} />
-            </button>
-          </div>
-        ))}
+        {project.milestones.map(m => {
+          const status = m.status || (m.actualDate ? "complete" : "not_started"); // Backwards compat
+          const nextStatus = status === "not_started" ? "in_progress" : status === "in_progress" ? "complete" : "not_started";
+          const statusColors = {
+            not_started: { bg: T.neutral[200], text: T.neutral[600], label: "Not Started" },
+            in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
+            complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
+          };
+          const sc = statusColors[status] || statusColors.not_started;
+          return (
+            <div key={m.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 100px auto", gap: "8px", marginBottom: "6px", alignItems: "center" }}>
+              <input value={m.description} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { description: e.target.value } })}
+                style={{ padding: "8px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
+              />
+              <input type="date" value={m.milestoneDate} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { milestoneDate: e.target.value } })}
+                style={{ padding: "8px 6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
+              />
+              <input type="date" value={m.targetDate} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { targetDate: e.target.value } })}
+                style={{ padding: "8px 6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
+              />
+              <button
+                onClick={() => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: nextStatus, actualDate: nextStatus === "complete" ? toISODate(new Date()) : "" } })}
+                style={{ padding: "6px 10px", border: "none", borderRadius: T.radius.sm, fontSize: "11px", fontWeight: 600, cursor: "pointer", background: sc.bg, color: sc.text }}
+              >
+                {sc.label}
+              </button>
+              <button onClick={() => dispatch({ type: "REMOVE_MILESTONE", id: m.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px", color: T.neutral[400] }}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          );
+        })}
       </Card>
 
       <Card style={{ marginBottom: "20px" }}>
@@ -2584,7 +2623,7 @@ function DailyEntry({ state, dispatch }) {
         <SectionTitle icon={CheckCircle2}>Milestone Check-In</SectionTitle>
         <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>Was a milestone completed or hit today?</p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-          {project.milestones.filter(m => !m.actualDate).map(m => (
+          {project.milestones.filter(m => (m.status || (m.actualDate ? "complete" : "not_started")) !== "complete").map(m => (
             <button key={m.id} onClick={() => update({ milestoneHit: report.milestoneHit?.id === m.id ? null : { id: m.id, date: report.date } })}
               style={{
                 padding: "8px 14px", borderRadius: T.radius.md, cursor: "pointer",
@@ -2597,7 +2636,7 @@ function DailyEntry({ state, dispatch }) {
               {m.description}
             </button>
           ))}
-          {project.milestones.filter(m => !m.actualDate).length === 0 && (
+          {project.milestones.filter(m => (m.status || (m.actualDate ? "complete" : "not_started")) !== "complete").length === 0 && (
             <span style={{ fontSize: "13px", color: T.neutral[400] }}>All milestones have been completed</span>
           )}
         </div>
@@ -3063,25 +3102,36 @@ function WeeklyGenerator({ state, dispatch }) {
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={CircleDot}>Milestone Tracking</SectionTitle>
         <div style={{ fontSize: "11px", color: T.neutral[500], marginBottom: "12px" }}>
-          Milestone = Owner Contract Schedule &ensp;|&ensp; Target = Sub OPS Schedule &ensp;|&ensp; Actual = Work Completed
+          Milestone = Owner Contract Schedule &ensp;|&ensp; Target = Sub OPS Schedule
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr style={{ background: T.navy[800] }}>
-              {["Description","Milestone","Target","Actual"].map(h => (
+              {["Description","Milestone","Target","Status"].map(h => (
                 <th key={h} scope="col" style={{ padding: "10px 14px", textAlign: "left", color: T.white, fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {project.milestones.map((m, i) => (
-              <tr key={m.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
-                <td style={{ padding: "9px 14px", fontWeight: 500, color: m.actualDate ? T.green[500] : T.navy[800] }}>{m.description}</td>
-                <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(m.milestoneDate)}</td>
-                <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(m.targetDate)}</td>
-                <td style={{ padding: "9px 14px", color: m.actualDate ? T.green[500] : T.neutral[300] }}>{fmtDateShort(m.actualDate) || "—"}</td>
-              </tr>
-            ))}
+            {project.milestones.map((m, i) => {
+              const status = m.status || (m.actualDate ? "complete" : "not_started");
+              const statusColors = {
+                not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Not Started" },
+                in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
+                complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
+              };
+              const sc = statusColors[status] || statusColors.not_started;
+              return (
+                <tr key={m.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
+                  <td style={{ padding: "9px 14px", fontWeight: 500, color: status === "complete" ? T.green[500] : status === "in_progress" ? "#92400e" : T.navy[800] }}>{m.description}</td>
+                  <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(m.milestoneDate)}</td>
+                  <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(m.targetDate)}</td>
+                  <td style={{ padding: "9px 14px" }}>
+                    <span style={{ padding: "3px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, background: sc.bg, color: sc.text }}>{sc.label}</span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </Card>
@@ -3330,7 +3380,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
     const roleKeys = ["indirectLabor", "apprentices", "foreman", "operators", "laborers", "carpenters", "cementMasons"];
     return sum + roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
   }, 0);
-  const completedMilestones = project.milestones?.filter(m => m.actualDate)?.length || 0;
+  const completedMilestones = project.milestones?.filter(m => (m.status || (m.actualDate ? "complete" : "not_started")) === "complete")?.length || 0;
   const totalMilestones = project.milestones?.length || 0;
   const allPhotos = projectDailies.flatMap(r => (r.photos || []).map(p => ({ ...p, date: r.date })));
   const recentDelays = projectDailies.slice(0, 7).filter(r => r.delaysProblems).map(r => ({ date: r.date, issue: r.delaysProblems }));
@@ -3520,15 +3570,17 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                     </thead>
                     <tbody>
                       {project.milestones.map((m, i) => {
-                        const isComplete = !!m.actualDate;
+                        const status = m.status || (m.actualDate ? "complete" : "not_started");
+                        const isComplete = status === "complete";
+                        const isInProgress = status === "in_progress";
                         const targetDate = m.targetDate ? new Date(m.targetDate) : null;
                         const actualDate = m.actualDate ? new Date(m.actualDate) : null;
-                        const isLate = actualDate && targetDate && actualDate > targetDate;
-                        const isPastDue = !isComplete && targetDate && targetDate < new Date();
+                        const isLate = isComplete && actualDate && targetDate && actualDate > targetDate;
+                        const isPastDue = !isComplete && !isInProgress && targetDate && targetDate < new Date();
                         return (
                           <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                             <td style={{ padding: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
-                              {isComplete ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
+                              {isComplete ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : isInProgress ? <Clock size={20} style={{ color: "#fbbf24" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
                               <span style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{m.description}</span>
                             </td>
                             <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.navy[400] }}>
@@ -3542,10 +3594,12 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                                 <span style={{ background: isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)", color: isLate ? "#fbbf24" : "#4ade80", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>
                                   {isLate ? "Completed Late" : "Complete"}
                                 </span>
+                              ) : isInProgress ? (
+                                <span style={{ background: "rgba(251,191,36,0.2)", color: "#fbbf24", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>In Progress</span>
                               ) : isPastDue ? (
                                 <span style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Past Due</span>
                               ) : (
-                                <span style={{ background: "rgba(255,255,255,0.1)", color: T.navy[400], padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Pending</span>
+                                <span style={{ background: "rgba(255,255,255,0.1)", color: T.navy[400], padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 600 }}>Not Started</span>
                               )}
                             </td>
                           </tr>
@@ -3556,18 +3610,20 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                   {/* Mobile Cards */}
                   <div className="cp-milestone-cards">
                     {project.milestones.map((m, i) => {
-                      const isComplete = !!m.actualDate;
+                      const status = m.status || (m.actualDate ? "complete" : "not_started");
+                      const isComplete = status === "complete";
+                      const isInProgress = status === "in_progress";
                       const targetDate = m.targetDate ? new Date(m.targetDate) : null;
                       const actualDate = m.actualDate ? new Date(m.actualDate) : null;
-                      const isLate = actualDate && targetDate && actualDate > targetDate;
-                      const isPastDue = !isComplete && targetDate && targetDate < new Date();
-                      const statusBg = isComplete ? (isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)") : isPastDue ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.1)";
-                      const statusColor = isComplete ? (isLate ? "#fbbf24" : "#4ade80") : isPastDue ? "#ef4444" : T.navy[400];
-                      const statusText = isComplete ? (isLate ? "Completed Late" : "Complete") : isPastDue ? "Past Due" : "Pending";
+                      const isLate = isComplete && actualDate && targetDate && actualDate > targetDate;
+                      const isPastDue = !isComplete && !isInProgress && targetDate && targetDate < new Date();
+                      const statusBg = isComplete ? (isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)") : isInProgress ? "rgba(251,191,36,0.2)" : isPastDue ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.1)";
+                      const statusColor = isComplete ? (isLate ? "#fbbf24" : "#4ade80") : isInProgress ? "#fbbf24" : isPastDue ? "#ef4444" : T.navy[400];
+                      const statusText = isComplete ? (isLate ? "Completed Late" : "Complete") : isInProgress ? "In Progress" : isPastDue ? "Past Due" : "Not Started";
                       return (
                         <div key={i} style={{ background: "rgba(0,0,0,0.2)", borderRadius: "12px", padding: "16px", marginBottom: "12px" }}>
                           <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", marginBottom: "12px" }}>
-                            {isComplete ? <CheckCircle2 size={22} style={{ color: "#4ade80", flexShrink: 0, marginTop: "2px" }} /> : <Circle size={22} style={{ color: T.navy[500], flexShrink: 0, marginTop: "2px" }} />}
+                            {isComplete ? <CheckCircle2 size={22} style={{ color: "#4ade80", flexShrink: 0, marginTop: "2px" }} /> : isInProgress ? <Clock size={22} style={{ color: "#fbbf24", flexShrink: 0, marginTop: "2px" }} /> : <Circle size={22} style={{ color: T.navy[500], flexShrink: 0, marginTop: "2px" }} />}
                             <div style={{ flex: 1 }}>
                               <div style={{ color: T.white, fontWeight: 600, fontSize: "15px", marginBottom: "8px" }}>{m.description}</div>
                               <span style={{ background: statusBg, color: statusColor, padding: "4px 12px", borderRadius: "20px", fontSize: "11px", fontWeight: 600 }}>{statusText}</span>
