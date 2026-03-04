@@ -1123,7 +1123,7 @@ function reducer(state, action) {
       };
     }
     case "SET_PROJECT": return updateActiveProject(action.data);
-    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...(project.milestones || []), { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "", status: "not_started" }] });
+    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...(project.milestones || []), { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "", inProgressDate: "", status: "not_started" }] });
     case "UPDATE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).map(m => m.id === action.id ? { ...m, ...action.data } : m) });
     case "REMOVE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).filter(m => m.id !== action.id) });
     case "ADD_SAFETY_MEETING": {
@@ -2646,10 +2646,20 @@ function DailyEntry({ state, dispatch }) {
 
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={CheckCircle2}>Milestone Check-In</SectionTitle>
-        <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>Click to cycle status: Not Started → In Progress → Complete</p>
+        <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>Click to update status as of {fmtDate(report.date)}</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {(project.milestones || []).map(m => {
-            const status = m.status || (m.actualDate ? "complete" : "not_started");
+            // Calculate status as of this report's date
+            const getStatusAsOfDate = () => {
+              const reportDate = report.date;
+              // If completed before or on this date, show complete
+              if (m.actualDate && m.actualDate <= reportDate) return "complete";
+              // If in progress started before or on this date, show in progress
+              if (m.inProgressDate && m.inProgressDate <= reportDate) return "in_progress";
+              // Otherwise not started
+              return "not_started";
+            };
+            const status = getStatusAsOfDate();
             const statusColors = {
               not_started: { bg: T.neutral[100], text: T.neutral[500], border: T.neutral[200], label: "Not Started" },
               in_progress: { bg: T.yellow[100], text: T.yellow[700], border: T.yellow[400], label: "In Progress" },
@@ -2657,8 +2667,21 @@ function DailyEntry({ state, dispatch }) {
             };
             const statusStyle = statusColors[status] || statusColors.not_started;
             const cycleStatus = () => {
-              const nextStatus = status === "not_started" ? "in_progress" : status === "in_progress" ? "complete" : "not_started";
-              dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: nextStatus, actualDate: nextStatus === "complete" ? toISODate(new Date()) : "" } });
+              // Cycle status and set the date to THIS REPORT'S date
+              const reportDate = report.date;
+              if (status === "not_started") {
+                // Move to in_progress as of this report's date
+                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "in_progress", inProgressDate: reportDate } });
+              } else if (status === "in_progress") {
+                // Move to complete as of this report's date
+                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "complete", actualDate: reportDate } });
+              } else {
+                // Reset to not_started (clear dates that are >= this report's date)
+                const newData = { status: "not_started" };
+                if (m.inProgressDate && m.inProgressDate >= reportDate) newData.inProgressDate = "";
+                if (m.actualDate && m.actualDate >= reportDate) newData.actualDate = "";
+                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: newData });
+              }
             };
             return (
               <button key={m.id} onClick={cycleStatus}
