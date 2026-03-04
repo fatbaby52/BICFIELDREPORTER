@@ -13,6 +13,11 @@ export const SAFETY_TOPICS = [
     overview: "Excavation work is one of the most hazardous construction operations. According to OSHA, cave-ins are the greatest risk and are far more likely to result in worker fatalities than other excavation-related accidents. Understanding the basic requirements of OSHA's excavation standard is the foundation of every safe dig.",
     keyPoints: ["All excavations 5 feet or deeper require a protective system (sloping, shoring, or shielding) unless the excavation is made entirely in stable rock.", "A competent person must inspect excavations daily before each shift, after every rainstorm, and after any event that could increase the hazard of a cave-in.", "Means of egress (ladders, steps, or ramps) must be provided in excavations 4 feet or deeper, spaced no more than 25 feet of lateral travel apart.", "Underground utilities must be located and marked before any digging begins. Contact your local One-Call system at least 48 hours in advance.", "Spoil piles, equipment, and materials must be kept at least 2 feet from the edge of excavations.", "Surface water and water accumulation in excavations must be controlled to prevent soil erosion and cave-ins."],
     discussionQuestions: ["What is the first thing a competent person should check before anyone enters an excavation?", "Can you name the three types of protective systems allowed by OSHA?", "What would you do if you noticed cracks forming along the edge of our excavation?"],
+    sampleAnswers: [
+      "The competent person should first verify that the protective system is properly installed and that there are no signs of potential cave-in (cracks, water seepage, undermining). Per 29 CFR 1926.651(k), inspections must occur before work begins each day.",
+      "The three protective systems are: (1) Sloping - cutting back the trench wall at an angle; (2) Shoring - installing supports to prevent soil movement; (3) Shielding - using trench boxes or shields to protect workers. Reference: 29 CFR 1926.652.",
+      "Stop work immediately and evacuate all personnel from the excavation. Notify the competent person to assess the situation. Cracks can indicate imminent cave-in. Do not re-enter until the competent person has evaluated and addressed the hazard."
+    ],
     remember: "No one enters an excavation until the competent person has inspected it AND a protective system is in place. No exceptions.",
   },
   {
@@ -24,6 +29,11 @@ export const SAFETY_TOPICS = [
     overview: "OSHA requires that soil and rock deposits be classified by a competent person before workers enter an excavation. Soil classification determines the type of protective system needed. Getting this wrong can be fatal — the wrong shoring in the wrong soil can fail without warning.",
     keyPoints: ["OSHA classifies soil into four categories: Stable Rock, Type A (most stable soil), Type B (medium stability), and Type C (least stable, including granular soils and submerged soil).", "Type A soil has an unconfined compressive strength of 1.5 tsf or greater. Examples include clay, silty clay, and sandy clay. However, no soil is Type A if it is fissured, subject to vibration, or has been previously disturbed.", "Type C soil has an unconfined compressive strength of 0.5 tsf or less. Gravel, sand, loamy sand, and submerged soil are always Type C. This is the most common classification on deep excavation jobs.", "At least one visual AND one manual test must be performed. Visual tests include checking for particle size, cracks, and water seepage. Manual tests include the thumb penetration test, pocket penetrometer, and ribbon test.", "Soil must be reclassified whenever conditions change — after rain, vibration from equipment, or when different soil layers are encountered.", "Layered soil systems must be classified according to the weakest layer."],
     discussionQuestions: ["What type of soil do we most commonly encounter on our job sites?", "If it rained overnight, can we assume the soil classification from yesterday still applies?", "Why would vibration from pile driving equipment affect soil classification?"],
+    sampleAnswers: [
+      "This answer will vary by location. Common answers include Type C (sandy/granular soils) or Type B (silty soils). The key point is that most disturbed soils cannot be classified as Type A. Per Appendix A, previously disturbed soil is automatically downgraded.",
+      "No. Per 29 CFR 1926 Subpart P Appendix A, soil must be reclassified after rain or any change in conditions. Water saturation weakens soil cohesion and can change Type B soil to Type C conditions.",
+      "Vibration from pile driving can cause soil particles to settle and compact, changing the soil structure. It can also cause liquefaction in saturated soils. Appendix A specifically states that soil subject to vibration cannot be classified as Type A."
+    ],
     remember: "When in doubt, classify the soil as Type C and use the most protective system available. It is always safer to over-protect.",
   },
   {
@@ -35,6 +45,11 @@ export const SAFETY_TOPICS = [
     overview: "OSHA requires a designated competent person on every excavation project. This is not just a title — it is a critical safety role. The competent person must have the training, knowledge, and authority to identify hazards and immediately take corrective action, including stopping work.",
     keyPoints: ["A competent person is defined as someone capable of identifying existing and predictable hazards in surroundings or working conditions that are unsanitary, hazardous, or dangerous to employees, AND who has the authority to take prompt corrective action.", "The competent person must inspect the excavation, adjacent areas, and protective systems before each shift begins, after every rainstorm or water intrusion event, and as needed throughout the shift.", "They must perform soil classification using both visual and manual testing methods.", "The competent person has the authority to remove employees from the excavation immediately if a hazard is identified. No supervisor or foreman can override this authority on safety matters.", "They must ensure all spoil, equipment, and materials are kept back from the excavation edge, and that means of egress are properly placed.", "Documentation of inspections is critical. If OSHA investigates, the competent person's records are the first thing they review."],
     discussionQuestions: ["Who is the designated competent person on our current job site?", "If the competent person identifies a hazard, who can overrule their decision to stop work?", "What should you do if you notice a hazard but the competent person is not on site?"],
+    sampleAnswers: [
+      "This should be a specific name. If crew members don't know, this is a critical gap. Per 29 CFR 1926.650(b), a competent person must be designated and all workers should know who it is.",
+      "No one. Per 29 CFR 1926.651(k), the competent person has the authority to take immediate corrective action, including stopping work. This authority cannot be overruled by supervisors, foremen, or project managers.",
+      "Do not enter or allow others to enter the hazardous area. Notify your supervisor immediately and contact the competent person. If the hazard is imminent (e.g., visible cave-in signs), evacuate and do not allow work to resume until the competent person has assessed the situation."
+    ],
     remember: "The competent person is not just an inspector — they are the last line of defense against cave-ins. Their authority to stop work is absolute.",
   },
   {
@@ -46,6 +61,11 @@ export const SAFETY_TOPICS = [
     overview: "Shoring is a structural system that supports the sides of an excavation to prevent cave-ins. For deep excavation work, shoring is often the primary protective system. Understanding the different types of shoring and their proper applications is essential to keeping our crews safe.",
     keyPoints: ["Timber shoring uses wood components (wales, cross braces, and uprights) to support excavation walls. OSHA provides specific timber sizing tables in Appendix C based on soil type and excavation depth.", "Aluminum hydraulic shoring uses lightweight, adjustable hydraulic cylinders. It is faster to install and remove than timber but must be used strictly according to manufacturer tabulated data.", "Steel sheet piling (soldier piles and lagging, or continuous interlocking sheets) is used for deep excavations, especially in poor soil or near existing structures. Design must be approved by a registered professional engineer.", "All shoring systems must be installed from the top down and removed from the bottom up to maintain continuous protection.", "Shoring must be designed to resist all loads that could reasonably be applied, including surcharge loads from spoil piles, equipment, and adjacent structures.", "Never modify or alter manufactured shoring components. If a system doesn't fit, contact the manufacturer or engineer."],
     discussionQuestions: ["What type of shoring system are we currently using on our project, and why was it selected?", "Why is it important to install shoring from the top down?", "What should you do if a hydraulic shore is leaking or not holding pressure?"],
+    sampleAnswers: [
+      "This answer will vary by project. Common systems include aluminum hydraulic shoring (quick installation), steel sheet piling (deep excavations), or slide rail systems. Selection factors include soil type, depth, adjacent structures, and duration of excavation.",
+      "Installing from top down ensures continuous protection as you dig deeper. Per Appendix D, this method maintains support at all times. Removing from bottom up prevents sudden loss of support that could cause collapse.",
+      "Stop work immediately and do not enter the excavation. A leaking or depressurized hydraulic shore cannot provide adequate support. Tag the shore out of service and notify the competent person. Replace the shore before work resumes. Per manufacturer specs, hydraulic shores must maintain design pressure."
+    ],
     remember: "A shoring system is only as good as its installation. Follow the engineer's design and manufacturer's instructions exactly — field modifications can cause catastrophic failure.",
   },
   {
@@ -1153,6 +1173,31 @@ export default function SafetyMeetings({ state, dispatch }) {
               ))}
             </div>
           </div>
+
+          {/* Cheat Sheet - Sample Answers */}
+          {t.sampleAnswers && t.sampleAnswers.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#1a3a5c", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ background: "#dbeafe", color: "#1e40af", padding: "2px 8px", borderRadius: 6, fontSize: 10 }}>LEADER ONLY</span>
+                Sample Answers & Citations
+              </div>
+              <div style={{ background: "linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)", borderRadius: 10, border: "2px solid #93c5fd", overflow: "hidden" }}>
+                {t.sampleAnswers.map((answer, idx) => (
+                  <div key={idx} style={{ padding: "14px 16px", borderBottom: idx < t.sampleAnswers.length - 1 ? "1px solid #93c5fd" : "none" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#1e40af", marginBottom: 6 }}>
+                      Q{idx + 1}: {t.discussionQuestions[idx]}
+                    </div>
+                    <div style={{ fontSize: 13, color: "#1e3a5f", lineHeight: 1.7 }}>
+                      {answer}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 8, fontStyle: "italic" }}>
+                💡 These are suggested answers for discussion leaders. Encourage crew participation before revealing answers.
+              </div>
+            </div>
+          )}
 
           {/* Remember callout */}
           <div style={{ background: "#fff3e0", borderRadius: 10, border: "3px solid #e87722", padding: 16, marginBottom: 16 }}>

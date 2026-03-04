@@ -2265,7 +2265,7 @@ function DailyEntry({ state, dispatch }) {
   };
 
   // Resize & compress an image file using canvas — returns a much smaller JPEG data URL
-  const compressImage = async (file, maxDim = 1600, quality = 0.7) => {
+  const compressImage = async (file, maxDim = 1600, quality = 0.7, returnBlob = false) => {
     // Convert HEIC to JPEG first if needed — browsers can't render HEIC natively
     const imageBlob = isHeic(file) ? await convertHeicToJpeg(file) : file;
 
@@ -2284,9 +2284,16 @@ function DailyEntry({ state, dispatch }) {
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
-        URL.revokeObjectURL(objectUrl);
-        resolve(dataUrl);
+        if (returnBlob) {
+          canvas.toBlob((blob) => {
+            URL.revokeObjectURL(objectUrl);
+            resolve(blob);
+          }, "image/jpeg", quality);
+        } else {
+          const dataUrl = canvas.toDataURL("image/jpeg", quality);
+          URL.revokeObjectURL(objectUrl);
+          resolve(dataUrl);
+        }
       };
       img.onerror = () => {
         URL.revokeObjectURL(objectUrl);
@@ -2308,7 +2315,7 @@ function DailyEntry({ state, dispatch }) {
     const baseCount = (report.photos?.length || 0);
     const baseTitle = photoDesc || "";
 
-    // Initialize per-photo progress: "pending" → "processing" → "done" / "error"
+    // Initialize per-photo progress: "pending" → "processing" → "uploading" → "done" / "error"
     const hasHeic = files.some(f => isHeic(f));
     const photoStatuses = files.map(() => "pending");
     setUploadProgress({ done: 0, total: files.length, photos: [...photoStatuses], heic: hasHeic });
@@ -2323,14 +2330,24 @@ function DailyEntry({ state, dispatch }) {
       photoStatuses[i] = "processing";
       setUploadProgress({ done: i, total: files.length, photos: [...photoStatuses], heic: hasHeic });
       try {
-        const [url, thumb] = await Promise.all([
-          compressImage(files[i], 1600, 0.7),
+        // Compress image and get blob for upload
+        const [imageBlob, thumbDataUrl] = await Promise.all([
+          compressImage(files[i], 1600, 0.7, true), // returnBlob=true
           makeThumbnail(files[i]),
         ]);
+
+        photoStatuses[i] = "uploading";
+        setUploadProgress({ done: i, total: files.length, photos: [...photoStatuses], heic: hasHeic });
+
+        // Upload to Supabase Storage
+        const photoId = `ph-${Date.now()}-${i}`;
+        const { url: publicUrl, path } = await uploadPhoto(imageBlob, project.id, report.id);
+
         allNewPhotos.push({
-          id: `ph-${Date.now()}-${i}`,
-          url,
-          thumb,
+          id: photoId,
+          url: publicUrl, // Public URL from Supabase Storage
+          thumb: thumbDataUrl, // Keep thumbnail as base64 for quick display
+          storagePath: path, // Store path for deletion later
           title: files.length === 1
             ? (baseTitle || "Photo " + (baseCount + 1))
             : (baseTitle ? `${baseTitle} (${i + 1})` : "Photo " + (baseCount + i + 1)),

@@ -23,10 +23,11 @@ const fromDbProject = (row) => ({
   equipmentRented: row.equipment_rented || [],
 })
 
-// Strip base64 image data from photos before saving to Supabase
-// (base64 URLs are too large for DB rows — image data stays in IndexedDB only)
+// Strip base64 thumbnail data from photos before saving to Supabase
+// URL is now a Supabase Storage public URL, so we keep it
+// Thumbnail is still base64 for quick local display, so we strip it
 const stripPhotoData = (photos) =>
-  (photos || []).map(({ url, thumb, ...meta }) => meta);
+  (photos || []).map(({ thumb, ...rest }) => rest);
 
 const toDbDaily = (r) => ({
   id: r.id,
