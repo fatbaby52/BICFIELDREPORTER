@@ -600,7 +600,26 @@ export const SAFETY_TOPICS = [
 
 
 const TOPICS = SAFETY_TOPICS; // Local alias
-const CATEGORIES = [...new Set(SAFETY_TOPICS.map(t => t.category))];
+// Define category order for sorting (most common/important first)
+const CATEGORY_ORDER = [
+  "Excavation Safety",
+  "Shoring Operations",
+  "Heavy Equipment",
+  "Pile Driving Safety",
+  "Fall Protection",
+  "Electrical Safety",
+  "General Safety",
+  "Year-End Review",
+];
+const CATEGORIES = CATEGORY_ORDER.filter(c => SAFETY_TOPICS.some(t => t.category === c));
+
+// Sort topics by category order, then alphabetically by title within each category
+const TOPICS_BY_CATEGORY = [...SAFETY_TOPICS].sort((a, b) => {
+  const catOrderA = CATEGORY_ORDER.indexOf(a.category);
+  const catOrderB = CATEGORY_ORDER.indexOf(b.category);
+  if (catOrderA !== catOrderB) return catOrderA - catOrderB;
+  return a.title.localeCompare(b.title);
+});
 export const CAT_COLORS = {
   "Excavation Safety": { bg: "#fef3c7", text: "#92400e", dot: "#f59e0b" },
   "Shoring Operations": { bg: "#dbeafe", text: "#1e40af", dot: "#3b82f6" },
@@ -787,12 +806,11 @@ export default function SafetyMeetings({ state, dispatch }) {
     setTimeout(() => setShowToast(null), 2600);
   }, []);
 
-  // Filter topics
-  const filteredTopics = TOPICS.filter(t => {
+  // Filter topics (sorted by category, then title)
+  const filteredTopics = TOPICS_BY_CATEGORY.filter(t => {
     const matchSearch = searchQuery === "" ||
       t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      `week ${t.week}`.includes(searchQuery.toLowerCase());
+      t.category.toLowerCase().includes(searchQuery.toLowerCase());
     const matchCat = filterCat === "All" || t.category === filterCat;
     const matchStatus = filterStatus === "all" ||
       (filterStatus === "downloaded" && downloaded[t.id]) ||
@@ -944,16 +962,17 @@ export default function SafetyMeetings({ state, dispatch }) {
                 onClick={() => { setSelectedTopic(topic); setScreen("view"); }}
               >
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                  {/* Week badge */}
+                  {/* Category indicator */}
                   <div style={{
                     width: 44, height: 44, borderRadius: 12, flexShrink: 0,
-                    background: isPres ? "#dcfce7" : isDL ? "#dbeafe" : "#f1f5f9",
-                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                    background: cc.bg,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    border: isPres ? "2px solid #22c55e" : isDL ? "2px solid #3b82f6" : "none",
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", lineHeight: 1 }}>WK</div>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: isPres ? "#166534" : isDL ? "#1e40af" : "#94a3b8", lineHeight: 1.1 }}>
-                      {topic.week}
-                    </div>
+                    <div style={{
+                      width: 20, height: 20, borderRadius: "50%",
+                      background: cc.dot,
+                    }} />
                   </div>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1018,7 +1037,7 @@ export default function SafetyMeetings({ state, dispatch }) {
 
     return (
       <div style={{ background: "#f8fafc", fontFamily: "'Inter','SF Pro Display',-apple-system,sans-serif", minHeight: "100vh" }}>
-        <TopBar title={`Week ${t.week}`} onBack={() => setScreen("topics")} />
+        <TopBar title={t.category} onBack={() => setScreen("topics")} />
 
         <div style={{ padding: "20px 16px" }}>
           <CatBadge cat={t.category} />
@@ -1117,7 +1136,7 @@ export default function SafetyMeetings({ state, dispatch }) {
     const t = selectedTopic;
     return (
       <div style={{ background: "#f8fafc", fontFamily: "'Inter','SF Pro Display',-apple-system,sans-serif", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-        <TopBar title={`Week ${t.week}: ${t.title}`} onBack={() => setScreen("view")} />
+        <TopBar title={t.title} onBack={() => setScreen("view")} />
 
         <div style={{ flex: 1, overflowY: "auto", padding: "20px 16px 100px" }}>
           {/* Header section */}
@@ -1294,7 +1313,7 @@ export default function SafetyMeetings({ state, dispatch }) {
         <div style={{ padding: "16px" }}>
           {/* Meeting info card */}
           <div style={{ background: "#fff", borderRadius: 14, padding: 16, border: "1px solid #e2e8f0", marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "#e87722" }}>Week {topic?.week}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#e87722" }}>{topic?.category}</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a5c", marginTop: 2 }}>{topic?.title}</div>
             <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#64748b" }}>
@@ -1392,7 +1411,7 @@ export default function SafetyMeetings({ state, dispatch }) {
                 <Check size={22} color="#166534" />
               </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#e87722" }}>Week {topic?.week} · {topic?.category}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#e87722" }}>{topic?.category}</div>
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a5c" }}>{topic?.title}</div>
               </div>
             </div>
