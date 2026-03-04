@@ -4045,11 +4045,20 @@ export default function App() {
               loadWeeklyReports(),
             ]);
 
-            // Supabase doesn't store base64 photo data (too large).
-            // Merge photo image data (url, thumb) from local IndexedDB back into Supabase records.
+            // Merge photos from local IndexedDB with Supabase records.
+            // Prefer Supabase URLs (cloud) over local base64 URLs.
+            // Only use local thumb for quick display.
             if (localState) {
               const localDailyMap = new Map((localState.dailyReports || []).map(r => [r.id, r]));
               const localWeeklyMap = new Map((localState.weeklyReports || []).map(r => [r.id, r]));
+
+              // Helper: pick the best URL (prefer cloud URL over base64)
+              const pickBestUrl = (supabaseUrl, localUrl) => {
+                // If Supabase has a real URL (not base64), use it
+                if (supabaseUrl && !isBase64Url(supabaseUrl)) return supabaseUrl;
+                // Otherwise fall back to local (might be base64 for offline photos)
+                return localUrl || supabaseUrl;
+              };
 
               dailyReports.forEach(r => {
                 const local = localDailyMap.get(r.id);
@@ -4057,7 +4066,7 @@ export default function App() {
                   const localPhotoMap = new Map(local.photos.filter(p => p.id).map(p => [p.id, p]));
                   r.photos = r.photos.map(p => {
                     const lp = localPhotoMap.get(p.id);
-                    return lp ? { ...p, url: lp.url || p.url, thumb: lp.thumb || p.thumb } : p;
+                    return lp ? { ...p, url: pickBestUrl(p.url, lp.url), thumb: lp.thumb || p.thumb } : p;
                   });
                 } else if (local?.photos?.length && (!r.photos || r.photos.length === 0)) {
                   // Supabase has no photos (save may have failed), keep local photos
@@ -4071,7 +4080,7 @@ export default function App() {
                   const localPhotoMap = new Map(local.selectedPhotos.filter(p => p.id).map(p => [p.id, p]));
                   r.selectedPhotos = r.selectedPhotos.map(p => {
                     const lp = localPhotoMap.get(p.id);
-                    return lp ? { ...p, url: lp.url || p.url, thumb: lp.thumb || p.thumb } : p;
+                    return lp ? { ...p, url: pickBestUrl(p.url, lp.url), thumb: lp.thumb || p.thumb } : p;
                   });
                 } else if (local?.selectedPhotos?.length && (!r.selectedPhotos || r.selectedPhotos.length === 0)) {
                   r.selectedPhotos = local.selectedPhotos;
