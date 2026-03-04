@@ -46,6 +46,7 @@ const toDbDaily = (r) => ({
   delays_problems: r.delaysProblems || '',
   extra_work: r.extraWork || '',
   milestone_hit: r.milestoneHit || null,
+  task_hours: r.taskHours || [],
   photos: stripPhotoData(r.photos),
   prepared_by: r.preparedBy || '',
 })
@@ -67,6 +68,7 @@ const fromDbDaily = (row) => ({
   delaysProblems: row.delays_problems || '',
   extraWork: row.extra_work || '',
   milestoneHit: row.milestone_hit || null,
+  taskHours: row.task_hours || [],
   photos: row.photos || [],
   preparedBy: row.prepared_by || '',
 })

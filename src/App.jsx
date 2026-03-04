@@ -462,6 +462,158 @@ const getWeekEnding = (d) => {
   return toISODate(dt);
 };
 
+// ─── Scheduling Helpers ─────────────────────────────────────
+const DAILY_CAPACITY = 8; // hours per day
+
+// Check if a date is a work day (Mon-Fri)
+const isWorkDay = (d) => {
+  const dt = parseLocalDate(d);
+  if (!dt) return false;
+  const day = dt.getDay();
+  return day >= 1 && day <= 5; // Monday = 1, Friday = 5
+};
+
+// Add N work days to a date (skipping weekends)
+const addWorkDays = (startDate, numDays) => {
+  const dt = parseLocalDate(startDate);
+  if (!dt || numDays <= 0) return startDate;
+  let remaining = Math.ceil(numDays);
+  while (remaining > 0) {
+    dt.setDate(dt.getDate() + 1);
+    if (isWorkDay(dt)) remaining--;
+  }
+  return toISODate(dt);
+};
+
+// Get week start (Monday) for a given date
+const getWeekStart = (d) => {
+  const dt = parseLocalDate(d) || new Date();
+  const day = dt.getDay();
+  const diff = day === 0 ? -6 : 1 - day; // If Sunday, go back 6; otherwise go back to Monday
+  dt.setDate(dt.getDate() + diff);
+  return toISODate(dt);
+};
+
+// Calculate milestone schedule based on tasks and logged hours
+const calculateMilestoneSchedule = (milestone, allTaskHours, numActiveMilestones = 1) => {
+  const tasks = milestone.tasks || [];
+  if (tasks.length === 0) return null;
+
+  const startDate = milestone.startDate || milestone.inProgressDate || toISODate(new Date());
+  const capacityPerMilestone = DAILY_CAPACITY / Math.max(1, numActiveMilestones);
+
+  let totalEstimated = 0;
+  let totalActual = 0;
+  let remainingHours = 0;
+
+  const taskSchedules = tasks.map(t => {
+    const estimated = parseFloat(t.estimatedHours) || 0;
+    const actual = allTaskHours
+      .filter(h => h.milestoneId === milestone.id && h.taskId === t.id)
+      .reduce((sum, h) => sum + (h.hours || 0), 0);
+    const remaining = t.status === "complete" ? 0 : Math.max(0, estimated - actual);
+
+    totalEstimated += estimated;
+    totalActual += actual;
+    remainingHours += remaining;
+
+    return { ...t, estimated, actual, remaining };
+  });
+
+  const daysRemaining = remainingHours / capacityPerMilestone;
+  const projectedCompletion = addWorkDays(toISODate(new Date()), daysRemaining);
+
+  return {
+    milestoneId: milestone.id,
+    description: milestone.description,
+    startDate,
+    targetDate: milestone.targetDate || "",
+    totalEstimated,
+    totalActual,
+    remainingHours,
+    daysRemaining: Math.ceil(daysRemaining),
+    projectedCompletion,
+    tasks: taskSchedules,
+    isOnTrack: !milestone.targetDate || projectedCompletion <= milestone.targetDate,
+  };
+};
+
+// Generate 3-week look-ahead from active milestones
+const generateLookAhead = (milestones, allTaskHours, weeksAhead = 3) => {
+  const normalizedMilestones = milestones.map(normalizeMilestone);
+  const today = toISODate(new Date());
+
+  // Find active milestones (started but not complete)
+  const activeMilestones = normalizedMilestones.filter(m => {
+    const startDate = m.startDate || m.inProgressDate || "";
+    const completionDate = m.completionDate || m.actualDate || "";
+    return startDate && startDate <= today && (!completionDate || completionDate > today);
+  });
+
+  if (activeMilestones.length === 0) return { weeks: [], activeMilestones: [] };
+
+  const capacityPerMilestone = DAILY_CAPACITY / Math.max(1, activeMilestones.length);
+  const hoursPerWeek = capacityPerMilestone * 5; // 5 work days
+
+  // Calculate schedules for each active milestone
+  const schedules = activeMilestones.map(m => calculateMilestoneSchedule(m, allTaskHours, activeMilestones.length));
+
+  // Build a work queue of tasks with remaining hours (mutable copy)
+  const taskQueue = [];
+  schedules.forEach(schedule => {
+    if (!schedule) return;
+    schedule.tasks.forEach(t => {
+      if (t.status !== "complete" && t.remaining > 0) {
+        taskQueue.push({
+          milestoneId: schedule.milestoneId,
+          milestoneDesc: schedule.description,
+          taskId: t.id,
+          taskDesc: t.description || "(Unnamed task)",
+          remaining: t.remaining,
+        });
+      }
+    });
+  });
+
+  // Generate week-by-week breakdown, consuming hours from the queue
+  const weeks = [];
+  for (let w = 0; w < weeksAhead; w++) {
+    const weekStart = getWeekStart(addWorkDays(today, w * 5));
+    const weekEnd = addWorkDays(weekStart, 4);
+    const weekTasks = [];
+    let weekHoursRemaining = hoursPerWeek * activeMilestones.length; // Total capacity this week
+
+    for (const task of taskQueue) {
+      if (task.remaining <= 0) continue;
+      if (weekHoursRemaining <= 0) break;
+
+      const hoursThisWeek = Math.min(task.remaining, weekHoursRemaining);
+      if (hoursThisWeek > 0) {
+        weekTasks.push({
+          milestoneId: task.milestoneId,
+          milestoneDesc: task.milestoneDesc,
+          taskId: task.taskId,
+          taskDesc: task.taskDesc,
+          hoursPlanned: Math.round(hoursThisWeek * 10) / 10,
+          totalRemaining: task.remaining,
+        });
+        task.remaining -= hoursThisWeek;
+        weekHoursRemaining -= hoursThisWeek;
+      }
+    }
+
+    weeks.push({
+      weekNum: w + 1,
+      weekStart,
+      weekEnd,
+      label: w === 0 ? "This Week" : w === 1 ? "Next Week" : `Week ${w + 1}`,
+      tasks: weekTasks,
+    });
+  }
+
+  return { weeks, schedules, activeMilestones };
+};
+
 // ─── BIC Logo ───────────────────────────────────────────────
 const BIC_LOGO = "/logo-blue.png";
 
@@ -1058,6 +1210,18 @@ const aggregateWeeklyData = (weekReports, project) => {
 
 const getActiveProject = (state) => state.projects.find(p => p.id === state.activeProjectId) || null;
 
+// Normalize milestone to new structure (backwards compatibility)
+const normalizeMilestone = (m) => ({
+  ...m,
+  startDate: m.startDate || m.inProgressDate || "",
+  targetDate: m.targetDate || "",
+  completionDate: m.completionDate || m.actualDate || "",
+  tasks: m.tasks || [],
+});
+
+// Get milestones with normalized structure
+const getNormalizedMilestones = (project) => (project?.milestones || []).map(normalizeMilestone);
+
 const newProjectTemplate = () => ({
   id: `proj-${Date.now()}`,
   jobNumber: "",
@@ -1123,9 +1287,24 @@ function reducer(state, action) {
       };
     }
     case "SET_PROJECT": return updateActiveProject(action.data);
-    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...(project.milestones || []), { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "", inProgressDate: "", status: "not_started" }] });
+    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...(project.milestones || []), { id: `m${Date.now()}`, description: "", startDate: "", targetDate: "", completionDate: "", status: "not_started", tasks: [] }] });
     case "UPDATE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).map(m => m.id === action.id ? { ...m, ...action.data } : m) });
     case "REMOVE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).filter(m => m.id !== action.id) });
+    case "ADD_TASK": return updateActiveProject({
+      milestones: (project.milestones || []).map(m => m.id === action.milestoneId
+        ? { ...m, tasks: [...(m.tasks || []), { id: `t${Date.now()}`, description: "", estimatedHours: 0, startDate: "", targetDate: "", completionDate: "", status: "not_started" }] }
+        : m)
+    });
+    case "UPDATE_TASK": return updateActiveProject({
+      milestones: (project.milestones || []).map(m => m.id === action.milestoneId
+        ? { ...m, tasks: (m.tasks || []).map(t => t.id === action.taskId ? { ...t, ...action.data } : t) }
+        : m)
+    });
+    case "REMOVE_TASK": return updateActiveProject({
+      milestones: (project.milestones || []).map(m => m.id === action.milestoneId
+        ? { ...m, tasks: (m.tasks || []).filter(t => t.id !== action.taskId) }
+        : m)
+    });
     case "ADD_SAFETY_MEETING": {
       const existing = project.safetyMeetings || [];
       // Don't add duplicate meetings for same topic
@@ -1151,7 +1330,7 @@ function reducer(state, action) {
         generalNotes: "", workforce: { foreman: { men: 0, hours: 8 }, operators: { men: 0, hours: 8 }, laborers: { men: 0, hours: 8 }, apprentices: { men: 0, hours: 8 }, carpenters: { men: 0, hours: 8 }, cementMasons: { men: 0, hours: 8 }, indirectLabor: { men: 0, hours: 8 } },
         equipmentPresent: [...project.equipmentOwned.map(e => e.id), ...project.equipmentRented.map(e => e.id)],
         equipmentDown: [], thirdPartyUtilities: "", materialDeliveries: "",
-        delaysProblems: "", extraWork: "", milestoneHit: null, photos: [], preparedBy: project.preparedBy || "",
+        delaysProblems: "", extraWork: "", milestoneHit: null, taskHours: [], photos: [], preparedBy: project.preparedBy || "",
       };
       return { ...state, editingDaily: newReport, currentView: "dailyEntry" };
     }
@@ -1159,6 +1338,22 @@ function reducer(state, action) {
     case "VIEW_DAILY": return { ...state, viewingDaily: action.report, currentView: "dailyView" };
     case "VIEW_WEEKLY": return { ...state, viewingWeekly: action.report, currentView: "weeklyView" };
     case "UPDATE_EDITING_DAILY": return { ...state, editingDaily: { ...state.editingDaily, ...action.data } };
+    case "UPDATE_TASK_HOURS": {
+      const existingHours = state.editingDaily.taskHours || [];
+      const idx = existingHours.findIndex(h => h.milestoneId === action.milestoneId && h.taskId === action.taskId);
+      let newTaskHours;
+      if (action.hours === 0 && idx >= 0) {
+        // Remove entry if hours is 0
+        newTaskHours = existingHours.filter((_, i) => i !== idx);
+      } else if (idx >= 0) {
+        newTaskHours = existingHours.map((h, i) => i === idx ? { ...h, hours: action.hours } : h);
+      } else if (action.hours > 0) {
+        newTaskHours = [...existingHours, { milestoneId: action.milestoneId, taskId: action.taskId, hours: action.hours }];
+      } else {
+        newTaskHours = existingHours;
+      }
+      return { ...state, editingDaily: { ...state.editingDaily, taskHours: newTaskHours } };
+    }
     case "SAVE_DAILY": {
       const saving = state.editingDaily;
       const exists = state.dailyReports.find(r => r.id === saving.id);
@@ -1697,6 +1892,245 @@ function ProjectAI({ state, project }) {
   );
 }
 
+// ─── Hours Summary Component ─────────────────────────────────
+function HoursSummary({ milestones, dailyReports, projectId }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // Get normalized milestones with tasks
+  const normalizedMilestones = milestones.map(normalizeMilestone);
+  const milestonesWithTasks = normalizedMilestones.filter(m => (m.tasks || []).length > 0);
+
+  if (milestonesWithTasks.length === 0) return null;
+
+  // Aggregate task hours from all daily reports for this project
+  const projectDailies = dailyReports.filter(r => r.projectId === projectId);
+  const allTaskHours = projectDailies.flatMap(r => r.taskHours || []);
+
+  // Calculate totals
+  let totalEstimated = 0;
+  let totalActual = 0;
+  const taskDetails = [];
+
+  milestonesWithTasks.forEach(m => {
+    (m.tasks || []).forEach(t => {
+      const estimated = parseFloat(t.estimatedHours) || 0;
+      const actual = allTaskHours
+        .filter(h => h.milestoneId === m.id && h.taskId === t.id)
+        .reduce((sum, h) => sum + (h.hours || 0), 0);
+      totalEstimated += estimated;
+      totalActual += actual;
+      taskDetails.push({
+        milestoneId: m.id,
+        milestoneDesc: m.description,
+        taskId: t.id,
+        taskDesc: t.description,
+        estimated,
+        actual,
+        status: t.status || "not_started",
+      });
+    });
+  });
+
+  if (totalEstimated === 0 && totalActual === 0) return null;
+
+  const variance = totalActual - totalEstimated;
+  const variancePercent = totalEstimated > 0 ? ((variance / totalEstimated) * 100).toFixed(0) : 0;
+  const isOverBudget = variance > 0;
+
+  return (
+    <Card style={{ marginBottom: "24px" }}>
+      <div
+        onClick={() => setIsExpanded(!isExpanded)}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <Clock size={20} style={{ color: T.orange[500] }} />
+          <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.navy[800] }}>Hours Summary</h3>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <div style={{ display: "flex", gap: "20px" }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: "11px", color: T.neutral[400], marginBottom: "2px" }}>Estimated</div>
+              <div style={{ fontSize: "18px", fontWeight: 700, color: T.navy[700] }}>{totalEstimated}h</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: "11px", color: T.neutral[400], marginBottom: "2px" }}>Actual</div>
+              <div style={{ fontSize: "18px", fontWeight: 700, color: T.navy[700] }}>{totalActual}h</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: "11px", color: T.neutral[400], marginBottom: "2px" }}>Variance</div>
+              <div style={{ fontSize: "18px", fontWeight: 700, color: isOverBudget ? T.red[500] : T.green[500] }}>
+                {variance > 0 ? "+" : ""}{variance}h
+                <span style={{ fontSize: "11px", fontWeight: 500, marginLeft: "4px" }}>({variancePercent}%)</span>
+              </div>
+            </div>
+          </div>
+          {isExpanded ? <ChevronUp size={18} style={{ color: T.neutral[400] }} /> : <ChevronDown size={18} style={{ color: T.neutral[400] }} />}
+        </div>
+      </div>
+
+      {isExpanded && (
+        <div style={{ marginTop: "16px", borderTop: `1px solid ${T.neutral[200]}`, paddingTop: "16px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.neutral[200]}` }}>
+                <th style={{ textAlign: "left", padding: "8px 12px", fontWeight: 600, color: T.neutral[500] }}>Task</th>
+                <th style={{ textAlign: "center", padding: "8px 12px", fontWeight: 600, color: T.neutral[500], width: "80px" }}>Estimated</th>
+                <th style={{ textAlign: "center", padding: "8px 12px", fontWeight: 600, color: T.neutral[500], width: "80px" }}>Actual</th>
+                <th style={{ textAlign: "center", padding: "8px 12px", fontWeight: 600, color: T.neutral[500], width: "80px" }}>Variance</th>
+                <th style={{ textAlign: "center", padding: "8px 12px", fontWeight: 600, color: T.neutral[500], width: "80px" }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {taskDetails.map((td, idx) => {
+                const taskVariance = td.actual - td.estimated;
+                const statusColors = {
+                  not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Pending" },
+                  in_progress: { bg: "#fef3c7", text: "#92400e", label: "Active" },
+                  complete: { bg: T.green[100], text: T.green[500], label: "Done" }
+                };
+                const sc = statusColors[td.status] || statusColors.not_started;
+                return (
+                  <tr key={`${td.milestoneId}-${td.taskId}`} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: idx % 2 === 0 ? T.white : T.neutral[50] }}>
+                    <td style={{ padding: "10px 12px" }}>
+                      <span style={{ color: T.navy[700] }}>{td.taskDesc || "(Unnamed task)"}</span>
+                      <span style={{ color: T.neutral[400], fontSize: "11px", marginLeft: "8px" }}>— {td.milestoneDesc}</span>
+                    </td>
+                    <td style={{ textAlign: "center", padding: "10px 12px", color: T.neutral[600] }}>{td.estimated}h</td>
+                    <td style={{ textAlign: "center", padding: "10px 12px", color: T.neutral[600] }}>{td.actual}h</td>
+                    <td style={{ textAlign: "center", padding: "10px 12px", fontWeight: 500, color: taskVariance > 0 ? T.red[500] : taskVariance < 0 ? T.green[500] : T.neutral[400] }}>
+                      {taskVariance > 0 ? "+" : ""}{taskVariance}h
+                    </td>
+                    <td style={{ textAlign: "center", padding: "10px 12px" }}>
+                      <span style={{ padding: "3px 8px", borderRadius: "4px", fontSize: "10px", fontWeight: 600, background: sc.bg, color: sc.text }}>{sc.label}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ─── Schedule Overview Component ─────────────────────────────────
+function ScheduleOverview({ milestones, dailyReports, projectId }) {
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  const normalizedMilestones = milestones.map(normalizeMilestone);
+  const projectDailies = dailyReports.filter(r => r.projectId === projectId);
+  const allTaskHours = projectDailies.flatMap(r => r.taskHours || []);
+
+  // Generate look-ahead data
+  const lookAhead = generateLookAhead(normalizedMilestones, allTaskHours, 3);
+
+  if (lookAhead.schedules?.length === 0 && lookAhead.weeks?.length === 0) return null;
+
+  const { schedules = [], weeks = [] } = lookAhead;
+
+  return (
+    <Card style={{ marginBottom: "24px" }}>
+      <div
+        onClick={() => setIsExpanded(!isExpanded)}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", marginBottom: isExpanded ? "16px" : 0 }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <Calendar size={20} style={{ color: T.orange[500] }} />
+          <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.navy[800] }}>Schedule & Look-Ahead</h3>
+        </div>
+        {isExpanded ? <ChevronUp size={18} style={{ color: T.neutral[400] }} /> : <ChevronDown size={18} style={{ color: T.neutral[400] }} />}
+      </div>
+
+      {isExpanded && (
+        <>
+          {/* Milestone Projections */}
+          {schedules.length > 0 && (
+            <div style={{ marginBottom: "20px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 600, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
+                Milestone Projections
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {schedules.filter(s => s !== null).map(s => {
+                  const isLate = s.targetDate && s.projectedCompletion > s.targetDate;
+                  const daysOverUnder = s.targetDate ? Math.round((new Date(s.projectedCompletion) - new Date(s.targetDate)) / (1000 * 60 * 60 * 24)) : 0;
+                  return (
+                    <div key={s.milestoneId} style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "12px 14px", borderRadius: T.radius.md,
+                      background: isLate ? "rgba(239, 68, 68, 0.08)" : T.neutral[50],
+                      border: `1px solid ${isLate ? "rgba(239, 68, 68, 0.2)" : T.neutral[200]}`,
+                    }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: "14px", fontWeight: 600, color: T.navy[700], marginBottom: "4px" }}>{s.description}</div>
+                        <div style={{ fontSize: "12px", color: T.neutral[500] }}>
+                          {s.remainingHours}h remaining &middot; ~{s.daysRemaining} work days
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "12px", color: T.neutral[400], marginBottom: "2px" }}>Projected</div>
+                        <div style={{ fontSize: "14px", fontWeight: 600, color: isLate ? T.red[500] : T.green[500] }}>
+                          {fmtDateShort(s.projectedCompletion)}
+                        </div>
+                        {s.targetDate && (
+                          <div style={{ fontSize: "11px", color: isLate ? T.red[500] : T.neutral[400], marginTop: "2px" }}>
+                            {isLate ? `${daysOverUnder}d late vs target` : `Target: ${fmtDateShort(s.targetDate)}`}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 3-Week Look-Ahead */}
+          {weeks.length > 0 && (
+            <div>
+              <div style={{ fontSize: "12px", fontWeight: 600, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
+                3-Week Look-Ahead
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}>
+                {weeks.map(week => (
+                  <div key={week.weekNum} style={{
+                    padding: "12px 14px", borderRadius: T.radius.md,
+                    background: week.weekNum === 1 ? T.orange[100] : T.neutral[50],
+                    border: `1px solid ${week.weekNum === 1 ? T.orange[400] : T.neutral[200]}`,
+                  }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: week.weekNum === 1 ? T.orange[600] : T.navy[700], marginBottom: "4px" }}>
+                      {week.label}
+                    </div>
+                    <div style={{ fontSize: "11px", color: T.neutral[400], marginBottom: "8px" }}>
+                      {fmtDateShort(week.weekStart)} – {fmtDateShort(week.weekEnd)}
+                    </div>
+                    {week.tasks.length === 0 ? (
+                      <div style={{ fontSize: "12px", color: T.neutral[400], fontStyle: "italic" }}>No tasks projected</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        {week.tasks.slice(0, 5).map((t, idx) => (
+                          <div key={`${t.taskId}-${idx}`} style={{ fontSize: "12px", color: T.navy[600] }}>
+                            <span style={{ fontWeight: 500 }}>{t.taskDesc}</span>
+                            <span style={{ color: T.neutral[400], marginLeft: "4px" }}>({t.hoursPlanned}h)</span>
+                          </div>
+                        ))}
+                        {week.tasks.length > 5 && (
+                          <div style={{ fontSize: "11px", color: T.neutral[400] }}>+{week.tasks.length - 5} more</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
 function Dashboard({ state, dispatch }) {
   const project = getActiveProject(state);
   const { dailyReports, weeklyReports } = state;
@@ -1726,10 +2160,29 @@ function Dashboard({ state, dispatch }) {
     const weekReports = projectDailies.filter(r => getWeekEnding(r.date) === weekEnding);
     const agg = aggregateWeeklyData(weekReports, project);
 
+    // Generate look-ahead from schedule data
+    const normalizedMilestones = (project.milestones || []).map(normalizeMilestone);
+    const allTaskHours = projectDailies.flatMap(r => r.taskHours || []);
+    const lookAheadData = generateLookAhead(normalizedMilestones, allTaskHours, 2);
+
+    // Convert look-ahead to editable text lines
+    let lookAheadLines = [];
+    if (lookAheadData.weeks && lookAheadData.weeks.length > 0) {
+      lookAheadData.weeks.forEach(week => {
+        if (week.tasks.length > 0) {
+          lookAheadLines.push(`${week.label} (${fmtDateShort(week.weekStart)} - ${fmtDateShort(week.weekEnd)}):`);
+          week.tasks.forEach(t => {
+            lookAheadLines.push(`  - ${t.taskDesc} (${t.hoursPlanned}h planned)`);
+          });
+        }
+      });
+    }
+    if (lookAheadLines.length === 0) lookAheadLines = [""];
+
     dispatch({ type: "SET_EDITING_WEEKLY", data: {
       id: `wr-${Date.now()}`, projectId: project.id, weekEnding,
       ongoingCompleted: agg.ongoingCompleted,
-      lookAhead: [""],
+      lookAhead: lookAheadLines,
       outstandingRFIs: "None", hotSubmittals: "",
       safety: agg.safety,
       importantDates: "", ownerDeliveryDates: "", outstandingOwnerItems: "",
@@ -1852,6 +2305,10 @@ function Dashboard({ state, dispatch }) {
         </button>
       </div>
 
+      <HoursSummary milestones={project.milestones || []} dailyReports={dailyReports} projectId={project.id} />
+
+      <ScheduleOverview milestones={project.milestones || []} dailyReports={dailyReports} projectId={project.id} />
+
       <SectionTitle icon={FileText}>Recent Daily Reports</SectionTitle>
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
         {projectDailies.slice().reverse().map(report => (
@@ -1964,6 +2421,207 @@ function Dashboard({ state, dispatch }) {
   );
 }
 
+// ─── Milestone Editor Component ─────────────────────────────────
+function MilestoneEditor({ milestones, dispatch, dailyReports = [], projectId }) {
+  const [expandedIds, setExpandedIds] = useState([]);
+  const toggleExpand = (id) => setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  // Calculate actual hours from daily reports
+  const projectDailies = dailyReports.filter(r => r.projectId === projectId);
+  const allTaskHours = projectDailies.flatMap(r => r.taskHours || []);
+  const getActualHours = (milestoneId, taskId) => {
+    return allTaskHours
+      .filter(h => h.milestoneId === milestoneId && h.taskId === taskId)
+      .reduce((sum, h) => sum + (h.hours || 0), 0);
+  };
+
+  if (milestones.length === 0) {
+    return <p style={{ fontSize: "13px", color: T.neutral[400] }}>No milestones yet. Click "Add Milestone" to create one.</p>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+      {milestones.map(m => {
+        const status = m.status || (m.completionDate ? "complete" : "not_started");
+        const nextStatus = status === "not_started" ? "in_progress" : status === "in_progress" ? "complete" : "not_started";
+        const statusColors = {
+          not_started: { bg: T.neutral[200], text: T.neutral[600], label: "Not Started" },
+          in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
+          complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
+        };
+        const sc = statusColors[status] || statusColors.not_started;
+        const isExpanded = expandedIds.includes(m.id);
+        const tasks = m.tasks || [];
+        const totalEstHours = tasks.reduce((sum, t) => sum + (parseFloat(t.estimatedHours) || 0), 0);
+        const totalActualHours = tasks.reduce((sum, t) => sum + getActualHours(m.id, t.id), 0);
+
+        return (
+          <div key={m.id} style={{ border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, overflow: "hidden" }}>
+            {/* Milestone Header */}
+            <div style={{ padding: "12px 14px", background: T.neutral[50], display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <button onClick={() => toggleExpand(m.id)} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "2px", color: T.neutral[500] }}>
+                {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+              </button>
+              <input value={m.description} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { description: e.target.value } })}
+                placeholder="Milestone description..." style={{ flex: 1, minWidth: "150px", padding: "6px 10px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", fontWeight: 500, outline: "none" }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
+                  <span style={{ fontSize: "10px", color: T.neutral[400] }}>Start</span>
+                  <input type="date" value={m.startDate || ""} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { startDate: e.target.value } })}
+                    style={{ padding: "4px 6px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "11px", outline: "none", width: "110px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
+                  <span style={{ fontSize: "10px", color: T.neutral[400] }}>Target</span>
+                  <input type="date" value={m.targetDate || ""} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { targetDate: e.target.value } })}
+                    style={{ padding: "4px 6px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "11px", outline: "none", width: "110px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
+                  <span style={{ fontSize: "10px", color: T.neutral[400] }}>Completed</span>
+                  <input type="date" value={m.completionDate || m.actualDate || ""} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { completionDate: e.target.value, actualDate: e.target.value } })}
+                    style={{ padding: "4px 6px", border: `1px solid ${status === "complete" ? T.green[500] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "11px", outline: "none", width: "110px", background: status === "complete" ? T.green[50] : T.white }}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  const today = toISODate(new Date());
+                  const data = { status: nextStatus };
+                  if (nextStatus === "in_progress") {
+                    data.startDate = today;
+                    data.inProgressDate = today; // backwards compat
+                  } else if (nextStatus === "complete") {
+                    data.completionDate = today;
+                    data.actualDate = today; // backwards compat
+                  } else {
+                    // Reset all dates when going back to not_started
+                    data.startDate = "";
+                    data.inProgressDate = "";
+                    data.completionDate = "";
+                    data.actualDate = "";
+                  }
+                  dispatch({ type: "UPDATE_MILESTONE", id: m.id, data });
+                }}
+                style={{ padding: "5px 10px", border: "none", borderRadius: T.radius.sm, fontSize: "11px", fontWeight: 600, cursor: "pointer", background: sc.bg, color: sc.text, whiteSpace: "nowrap" }}
+              >
+                {sc.label}
+              </button>
+              <button onClick={() => dispatch({ type: "REMOVE_MILESTONE", id: m.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px", color: T.neutral[400] }}
+                onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
+                onMouseLeave={e => { e.currentTarget.style.color = T.neutral[400]; }}
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+
+            {/* Expanded Tasks Section */}
+            {isExpanded && (
+              <div style={{ padding: "12px 14px 16px", borderTop: `1px solid ${T.neutral[200]}`, background: T.white }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    Tasks {tasks.length > 0 && (
+                      <span style={{ fontWeight: 400, textTransform: "none" }}>
+                        — {totalActualHours}h / {totalEstHours}h
+                        {totalActualHours > totalEstHours && <span style={{ color: T.red[500], marginLeft: "4px" }}>(+{totalActualHours - totalEstHours}h over)</span>}
+                      </span>
+                    )}
+                  </span>
+                  <Btn icon={Plus} size="sm" variant="secondary" onClick={() => dispatch({ type: "ADD_TASK", milestoneId: m.id })}>Add Task</Btn>
+                </div>
+                {tasks.length === 0 ? (
+                  <p style={{ fontSize: "12px", color: T.neutral[400], paddingLeft: "4px" }}>No tasks. Click "Add Task" to break this milestone into trackable work items.</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    {tasks.map(t => {
+                      const tStatus = t.status || "not_started";
+                      const tNextStatus = tStatus === "not_started" ? "in_progress" : tStatus === "in_progress" ? "complete" : "not_started";
+                      const tStatusColors = {
+                        not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Pending" },
+                        in_progress: { bg: "#fef3c7", text: "#92400e", label: "Active" },
+                        complete: { bg: T.green[100], text: T.green[500], label: "Done" }
+                      };
+                      const tsc = tStatusColors[tStatus] || tStatusColors.not_started;
+                      const actualHours = getActualHours(m.id, t.id);
+                      const estHours = parseFloat(t.estimatedHours) || 0;
+                      const isOver = actualHours > estHours && estHours > 0;
+                      return (
+                        <div key={t.id} style={{ padding: "8px 10px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, background: T.neutral[50] }}>
+                          {/* Task row 1: Description, Hours, Status, Delete */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                            <input value={t.description} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { description: e.target.value } })}
+                              placeholder="Task description..." style={{ flex: 1, padding: "6px 8px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none", background: T.white }}
+                            />
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              <div style={{ textAlign: "center", minWidth: "55px" }}>
+                                <div style={{ fontSize: "9px", color: T.neutral[400], marginBottom: "1px" }}>Est.</div>
+                                <input type="number" step="0.5" min="0" value={t.estimatedHours || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { estimatedHours: parseFloat(e.target.value) || 0 } })}
+                                  placeholder="0" style={{ width: "50px", padding: "4px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none", textAlign: "center", background: T.white }}
+                                />
+                              </div>
+                              <div style={{ textAlign: "center", minWidth: "50px" }}>
+                                <div style={{ fontSize: "9px", color: T.neutral[400], marginBottom: "1px" }}>Actual</div>
+                                <div style={{ padding: "4px", fontSize: "12px", fontWeight: 600, color: isOver ? T.red[500] : T.navy[600] }}>
+                                  {actualHours}h
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => {
+                                const today = toISODate(new Date());
+                                const data = { status: tNextStatus };
+                                if (tNextStatus === "in_progress" && !t.startDate) data.startDate = today;
+                                if (tNextStatus === "complete" && !t.completionDate) data.completionDate = today;
+                                if (tNextStatus === "not_started") { data.startDate = ""; data.completionDate = ""; }
+                                dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data });
+                              }}
+                              style={{ padding: "4px 8px", border: "none", borderRadius: T.radius.sm, fontSize: "10px", fontWeight: 600, cursor: "pointer", background: tsc.bg, color: tsc.text }}
+                            >
+                              {tsc.label}
+                            </button>
+                            <button onClick={() => dispatch({ type: "REMOVE_TASK", milestoneId: m.id, taskId: t.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "2px", color: T.neutral[300] }}
+                              onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
+                              onMouseLeave={e => { e.currentTarget.style.color = T.neutral[300]; }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                          {/* Task row 2: Dates */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", paddingLeft: "4px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              <span style={{ fontSize: "10px", color: T.neutral[400] }}>Start:</span>
+                              <input type="date" value={t.startDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { startDate: e.target.value } })}
+                                style={{ padding: "3px 5px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: T.white }}
+                              />
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              <span style={{ fontSize: "10px", color: T.neutral[400] }}>Target:</span>
+                              <input type="date" value={t.targetDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { targetDate: e.target.value } })}
+                                style={{ padding: "3px 5px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: T.white }}
+                              />
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              <span style={{ fontSize: "10px", color: T.neutral[400] }}>Complete:</span>
+                              <input type="date" value={t.completionDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { completionDate: e.target.value } })}
+                                style={{ padding: "3px 5px", border: `1px solid ${tStatus === "complete" ? T.green[500] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: tStatus === "complete" ? T.green[50] : T.white }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Project Setup Component ─────────────────────────────────
 function ProjectSetup({ state, dispatch }) {
   const project = getActiveProject(state);
@@ -1985,44 +2643,10 @@ function ProjectSetup({ state, dispatch }) {
       </Card>
 
       <Card style={{ marginBottom: "20px" }}>
-        <SectionTitle icon={CircleDot} action={<Btn icon={Plus} size="sm" onClick={() => dispatch({ type: "ADD_MILESTONE" })}>Add</Btn>}>
-          Milestones
+        <SectionTitle icon={CircleDot} action={<Btn icon={Plus} size="sm" onClick={() => dispatch({ type: "ADD_MILESTONE" })}>Add Milestone</Btn>}>
+          Milestones & Tasks
         </SectionTitle>
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 100px auto", gap: "8px", fontSize: "12px", fontWeight: 600, color: T.neutral[500], marginBottom: "8px", padding: "0 4px" }}>
-          <span>Description</span><span>Milestone</span><span>Target</span><span>Status</span><span></span>
-        </div>
-        {project.milestones.map(m => {
-          const status = m.status || (m.actualDate ? "complete" : "not_started"); // Backwards compat
-          const nextStatus = status === "not_started" ? "in_progress" : status === "in_progress" ? "complete" : "not_started";
-          const statusColors = {
-            not_started: { bg: T.neutral[200], text: T.neutral[600], label: "Not Started" },
-            in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
-            complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
-          };
-          const sc = statusColors[status] || statusColors.not_started;
-          return (
-            <div key={m.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 100px auto", gap: "8px", marginBottom: "6px", alignItems: "center" }}>
-              <input value={m.description} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { description: e.target.value } })}
-                style={{ padding: "8px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
-              />
-              <input type="date" value={m.milestoneDate} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { milestoneDate: e.target.value } })}
-                style={{ padding: "8px 6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
-              />
-              <input type="date" value={m.targetDate} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { targetDate: e.target.value } })}
-                style={{ padding: "8px 6px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
-              />
-              <button
-                onClick={() => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: nextStatus, actualDate: nextStatus === "complete" ? toISODate(new Date()) : "" } })}
-                style={{ padding: "6px 10px", border: "none", borderRadius: T.radius.sm, fontSize: "11px", fontWeight: 600, cursor: "pointer", background: sc.bg, color: sc.text }}
-              >
-                {sc.label}
-              </button>
-              <button onClick={() => dispatch({ type: "REMOVE_MILESTONE", id: m.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px", color: T.neutral[400] }}>
-                <Trash2 size={16} />
-              </button>
-            </div>
-          );
-        })}
+        <MilestoneEditor milestones={getNormalizedMilestones(project)} dispatch={dispatch} dailyReports={state.dailyReports} projectId={project.id} />
       </Card>
 
       <Card style={{ marginBottom: "20px" }}>
@@ -2074,6 +2698,79 @@ function ProjectSetup({ state, dispatch }) {
   );
 }
 
+// ─── Task Hours Entry Component ──────────────────────────────────
+function TaskHoursEntry({ milestones, taskHours, reportDate, dispatch }) {
+  // Only show milestones that are in-progress as of the report date
+  const inProgressMilestones = milestones.filter(m => {
+    const startDate = m.startDate || m.inProgressDate || "";
+    const completionDate = m.completionDate || m.actualDate || "";
+    // In progress if: started on or before this date AND not completed before this date
+    if (!startDate || startDate > reportDate) return false;
+    if (completionDate && completionDate < reportDate) return false;
+    return true;
+  });
+
+  // Filter to milestones with tasks
+  const milestonesWithTasks = inProgressMilestones.filter(m => (m.tasks || []).length > 0);
+
+  if (milestonesWithTasks.length === 0) {
+    return null; // Don't show if no active tasks
+  }
+
+  const getHoursForTask = (milestoneId, taskId) => {
+    const entry = (taskHours || []).find(h => h.milestoneId === milestoneId && h.taskId === taskId);
+    return entry?.hours || 0;
+  };
+
+  const totalHoursLogged = (taskHours || []).reduce((sum, h) => sum + (h.hours || 0), 0);
+
+  return (
+    <Card style={{ marginBottom: "16px" }}>
+      <SectionTitle icon={Clock}>Task Hours</SectionTitle>
+      <p style={{ fontSize: "12px", color: T.neutral[500], marginBottom: "12px" }}>
+        Log hours worked on tasks today. {totalHoursLogged > 0 && <span style={{ fontWeight: 600, color: T.orange[500] }}>Total: {totalHoursLogged}h</span>}
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        {milestonesWithTasks.map(m => (
+          <div key={m.id}>
+            <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[700], marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+              <CircleDot size={14} style={{ color: T.orange[400] }} />
+              {m.description}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px", paddingLeft: "20px" }}>
+              {(m.tasks || []).filter(t => t.status !== "complete").map(t => {
+                const hours = getHoursForTask(m.id, t.id);
+                return (
+                  <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <span style={{ flex: 1, fontSize: "13px", color: T.navy[600] }}>
+                      {t.description || "(Unnamed task)"}
+                      <span style={{ color: T.neutral[400], marginLeft: "8px", fontSize: "11px" }}>
+                        ({t.estimatedHours || 0}h est.)
+                      </span>
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        value={hours || ""}
+                        placeholder="0"
+                        onChange={e => dispatch({ type: "UPDATE_TASK_HOURS", milestoneId: m.id, taskId: t.id, hours: parseFloat(e.target.value) || 0 })}
+                        style={{ width: "60px", padding: "6px 8px", border: `1.5px solid ${hours > 0 ? T.orange[400] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", textAlign: "center", outline: "none", background: hours > 0 ? T.orange[100] : T.white }}
+                      />
+                      <span style={{ fontSize: "12px", color: T.neutral[500] }}>hrs</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 // ─── Daily Entry Component ──────────────────────────────────
 function DailyEntry({ state, dispatch }) {
   const report = state.editingDaily;
@@ -2088,6 +2785,8 @@ function DailyEntry({ state, dispatch }) {
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
   const recognitionRef = useRef(null);
+  const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N, photos: [{status}] } or null
+  const uploadCancelledRef = useRef(false);
 
   // Cleanup speech recognition on unmount
   useEffect(() => {
@@ -2098,6 +2797,14 @@ function DailyEntry({ state, dispatch }) {
       }
     };
   }, []);
+
+  // Warn user if they try to navigate away mid-upload
+  useEffect(() => {
+    if (!uploadProgress) return;
+    const handleBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [uploadProgress]);
 
   if (!report) {
     return (
@@ -2242,17 +2949,6 @@ function DailyEntry({ state, dispatch }) {
       )}
     </>
   );
-
-  const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N, photos: [{status}] } or null
-  const uploadCancelledRef = useRef(false);
-
-  // Warn user if they try to navigate away mid-upload
-  useEffect(() => {
-    if (!uploadProgress) return;
-    const handleBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ""; };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [uploadProgress]);
 
   // Check if a file is HEIC/HEIF format (iPhone default)
   const isHeic = (file) => {
@@ -2649,13 +3345,15 @@ function DailyEntry({ state, dispatch }) {
         <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>Click to update status as of {fmtDate(report.date)}</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {(project.milestones || []).map(m => {
-            // Calculate status as of this report's date
+            // Calculate status as of this report's date (supports both old and new field names)
             const getStatusAsOfDate = () => {
               const reportDate = report.date;
+              const completionDate = m.completionDate || m.actualDate || "";
+              const startDate = m.startDate || m.inProgressDate || "";
               // If completed before or on this date, show complete
-              if (m.actualDate && m.actualDate <= reportDate) return "complete";
+              if (completionDate && completionDate <= reportDate) return "complete";
               // If in progress started before or on this date, show in progress
-              if (m.inProgressDate && m.inProgressDate <= reportDate) return "in_progress";
+              if (startDate && startDate <= reportDate) return "in_progress";
               // Otherwise not started
               return "not_started";
             };
@@ -2668,18 +3366,21 @@ function DailyEntry({ state, dispatch }) {
             const statusStyle = statusColors[status] || statusColors.not_started;
             const cycleStatus = () => {
               // Cycle status and set the date to THIS REPORT'S date
+              // Write both old and new field names for backwards compatibility
               const reportDate = report.date;
               if (status === "not_started") {
                 // Move to in_progress as of this report's date
-                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "in_progress", inProgressDate: reportDate } });
+                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "in_progress", startDate: reportDate, inProgressDate: reportDate } });
               } else if (status === "in_progress") {
                 // Move to complete as of this report's date
-                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "complete", actualDate: reportDate } });
+                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "complete", completionDate: reportDate, actualDate: reportDate } });
               } else {
                 // Reset to not_started (clear dates that are >= this report's date)
+                const completionDate = m.completionDate || m.actualDate || "";
+                const startDate = m.startDate || m.inProgressDate || "";
                 const newData = { status: "not_started" };
-                if (m.inProgressDate && m.inProgressDate >= reportDate) newData.inProgressDate = "";
-                if (m.actualDate && m.actualDate >= reportDate) newData.actualDate = "";
+                if (startDate && startDate >= reportDate) { newData.startDate = ""; newData.inProgressDate = ""; }
+                if (completionDate && completionDate >= reportDate) { newData.completionDate = ""; newData.actualDate = ""; }
                 dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: newData });
               }
             };
@@ -2714,6 +3415,13 @@ function DailyEntry({ state, dispatch }) {
           )}
         </div>
       </Card>
+
+      <TaskHoursEntry
+        milestones={getNormalizedMilestones(project)}
+        taskHours={report.taskHours || []}
+        reportDate={report.date}
+        dispatch={dispatch}
+      />
 
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={Camera}>Progress Photos</SectionTitle>

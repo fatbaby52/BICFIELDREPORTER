@@ -37,6 +37,7 @@ CREATE TABLE daily_reports (
   delays_problems TEXT DEFAULT '',
   extra_work TEXT DEFAULT '',
   milestone_hit JSONB,
+  task_hours JSONB DEFAULT '[]'::jsonb,
   photos JSONB DEFAULT '[]'::jsonb,
   prepared_by TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW(),
