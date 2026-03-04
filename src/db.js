@@ -170,12 +170,31 @@ export async function deleteWeeklyReport(id) {
 }
 
 // ─── Photo Storage ───────────────────────────────────────────
+
+// Check if a URL is a base64 data URL (needs to be uploaded to cloud)
+export function isBase64Url(url) {
+  return url && typeof url === 'string' && url.startsWith('data:')
+}
+
+// Convert base64 data URL to Blob for uploading
+function base64ToBlob(base64) {
+  const parts = base64.split(',')
+  const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg'
+  const bstr = atob(parts[1])
+  const arr = new Uint8Array(bstr.length)
+  for (let i = 0; i < bstr.length; i++) {
+    arr[i] = bstr.charCodeAt(i)
+  }
+  return new Blob([arr], { type: mime })
+}
+
 export async function uploadPhoto(file, projectId, reportId) {
-  if (!supabase) {
-    // Fallback: return base64 data URL
+  // If no supabase or offline, store as base64 (will sync later)
+  if (!supabase || !navigator.onLine) {
+    // Return base64 data URL - will be synced when online
     return new Promise((resolve) => {
       const reader = new FileReader()
-      reader.onload = (e) => resolve({ url: e.target.result, path: null })
+      reader.onload = (e) => resolve({ url: e.target.result, path: null, pendingUpload: true })
       reader.readAsDataURL(file)
     })
   }
@@ -184,10 +203,60 @@ export async function uploadPhoto(file, projectId, reportId) {
   const { error } = await supabase.storage.from('project-photos').upload(path, file)
   if (error) {
     console.error('uploadPhoto error:', error)
-    return { url: '', path: null }
+    // On error, fall back to base64 (will try to sync later)
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve({ url: e.target.result, path: null, pendingUpload: true })
+      reader.readAsDataURL(file)
+    })
   }
   const { data: { publicUrl } } = supabase.storage.from('project-photos').getPublicUrl(path)
   return { url: publicUrl, path }
+}
+
+// Upload a base64 photo to Supabase (for syncing offline photos)
+// Returns the original base64 URL if upload fails - never loses data
+export async function uploadBase64Photo(base64Url, projectId, reportId, retries = 2) {
+  // Validate inputs
+  if (!base64Url || typeof base64Url !== 'string' || !base64Url.startsWith('data:')) {
+    return { url: base64Url, path: null, pendingUpload: false } // Not a valid base64, skip
+  }
+  if (!supabase || !navigator.onLine) {
+    return { url: base64Url, path: null, pendingUpload: true }
+  }
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const blob = base64ToBlob(base64Url)
+      if (!blob || blob.size === 0) {
+        console.error('uploadBase64Photo: Failed to convert base64 to blob')
+        return { url: base64Url, path: null, pendingUpload: true }
+      }
+
+      const path = `${projectId}/${reportId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+      const { error } = await supabase.storage.from('project-photos').upload(path, blob)
+
+      if (error) {
+        console.error(`uploadBase64Photo attempt ${attempt + 1} failed:`, error.message)
+        if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1))) // Backoff
+          continue
+        }
+        return { url: base64Url, path: null, pendingUpload: true }
+      }
+
+      const { data: { publicUrl } } = supabase.storage.from('project-photos').getPublicUrl(path)
+      return { url: publicUrl, path, pendingUpload: false }
+    } catch (err) {
+      console.error(`uploadBase64Photo attempt ${attempt + 1} error:`, err.message)
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+        continue
+      }
+      return { url: base64Url, path: null, pendingUpload: true }
+    }
+  }
+  return { url: base64Url, path: null, pendingUpload: true }
 }
 
 export async function deletePhoto(path) {

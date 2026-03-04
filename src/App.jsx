@@ -1,6 +1,6 @@
 import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } from "react";
 import * as lucide from "lucide-react";
-import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto } from './db';
+import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 import SafetyMeetings, { SAFETY_TOPICS, CAT_COLORS } from './SafetyMeetings';
 import heic2any from 'heic2any';
@@ -652,7 +652,7 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
 <div class="grid">
   <div class="info-box"><div class="info-box-title">Third Party Utilities</div><div class="info-box-content">${report.thirdPartyUtilities || "None"}</div></div>
   <div class="info-box"><div class="info-box-title">Material Deliveries</div><div class="info-box-content">${report.materialDeliveries || "None"}</div></div>
-  <div class="info-box${report.delaysProblems ? ' alert' : ''}"><div class="info-box-title">Delays / Problems</div><div class="info-box-content">${report.delaysProblems || "None"}</div></div>
+  <div class="info-box${report.delaysProblems && !isNoIncident(report.delaysProblems) ? ' alert' : ''}"><div class="info-box-title">Delays / Problems</div><div class="info-box-content">${report.delaysProblems || "None"}</div></div>
   <div class="info-box"><div class="info-box-title">Extra Work / Claims / Misc.</div><div class="info-box-content">${report.extraWork || "None"}</div></div>
 </div>
 
@@ -1033,7 +1033,7 @@ const aggregateWeeklyData = (weekReports, project) => {
     const firstSentence = r.generalNotes.split(/\.\s+/)[0];
     const summary = firstSentence.length > 120 ? firstSentence.substring(0, 117) + "..." : firstSentence;
     if (summary.length > 10) ongoing.push(summary);
-    if (r.delaysProblems) delays.push(r.delaysProblems);
+    if (r.delaysProblems && !isNoIncident(r.delaysProblems)) delays.push(r.delaysProblems);
   });
 
   const uniqueOngoing = [...new Set(ongoing)];
@@ -1122,9 +1122,9 @@ function reducer(state, action) {
       };
     }
     case "SET_PROJECT": return updateActiveProject(action.data);
-    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...project.milestones, { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "", status: "not_started" }] });
-    case "UPDATE_MILESTONE": return updateActiveProject({ milestones: project.milestones.map(m => m.id === action.id ? { ...m, ...action.data } : m) });
-    case "REMOVE_MILESTONE": return updateActiveProject({ milestones: project.milestones.filter(m => m.id !== action.id) });
+    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...(project.milestones || []), { id: `m${Date.now()}`, description: "", milestoneDate: "", targetDate: "", actualDate: "", status: "not_started" }] });
+    case "UPDATE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).map(m => m.id === action.id ? { ...m, ...action.data } : m) });
+    case "REMOVE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).filter(m => m.id !== action.id) });
     case "ADD_SAFETY_MEETING": {
       const existing = project.safetyMeetings || [];
       // Don't add duplicate meetings for same topic
@@ -1154,7 +1154,7 @@ function reducer(state, action) {
       };
       return { ...state, editingDaily: newReport, currentView: "dailyEntry" };
     }
-    case "EDIT_DAILY": return { ...state, editingDaily: { ...action.report }, currentView: "dailyEntry" };
+    case "EDIT_DAILY": return { ...state, editingDaily: { ...action.report }, activeProjectId: action.report.projectId, currentView: "dailyEntry" };
     case "VIEW_DAILY": return { ...state, viewingDaily: action.report, currentView: "dailyView" };
     case "VIEW_WEEKLY": return { ...state, viewingWeekly: action.report, currentView: "weeklyView" };
     case "UPDATE_EDITING_DAILY": return { ...state, editingDaily: { ...state.editingDaily, ...action.data } };
@@ -1176,6 +1176,8 @@ function reducer(state, action) {
       return { ...state, projects: updatedProjects, dailyReports: reports.sort((a,b) => a.date.localeCompare(b.date)), currentView: "dashboard", editingDaily: null };
     }
     case "DELETE_DAILY": return { ...state, dailyReports: state.dailyReports.filter(r => r.id !== action.id) };
+    case "UPDATE_DAILY_PHOTOS": return { ...state, dailyReports: state.dailyReports.map(r => r.id === action.reportId ? { ...r, photos: action.photos } : r) };
+    case "UPDATE_WEEKLY_PHOTOS": return { ...state, weeklyReports: state.weeklyReports.map(r => r.id === action.reportId ? { ...r, selectedPhotos: action.photos } : r) };
     case "SET_EDITING_WEEKLY": return { ...state, editingWeekly: action.data, currentView: "weeklyGen" };
     case "SAVE_WEEKLY": {
       const exists = state.weeklyReports.find(r => r.id === state.editingWeekly.id);
@@ -1866,7 +1868,7 @@ function Dashboard({ state, dispatch }) {
                     <div style={{ fontSize: "12px", color: T.neutral[500] }}>{report.weather}</div>
                   </div>
                 </div>
-                {report.delaysProblems && (
+                {report.delaysProblems && !isNoIncident(report.delaysProblems) && (
                   <Badge color="red">Delay</Badge>
                 )}
                 {!isNoIncident(report.incidents) && (
@@ -2077,6 +2079,7 @@ function DailyEntry({ state, dispatch }) {
   const project = getActiveProject(state);
   const [isRecording, setIsRecording] = useState(false);
   const [photoDesc, setPhotoDesc] = useState("");
+  const [photoSize, setPhotoSize] = useState("small"); // "small" (1600px) or "big" (2400px)
   const [aiRevising, setAiRevising] = useState(null); // stores the field key being revised, e.g. "generalNotes"
   const [aiRevisedText, setAiRevisedText] = useState("");
   const [aiPreviewField, setAiPreviewField] = useState(null); // which field is showing the preview
@@ -2331,8 +2334,12 @@ function DailyEntry({ state, dispatch }) {
       setUploadProgress({ done: i, total: files.length, photos: [...photoStatuses], heic: hasHeic });
       try {
         // Compress image and get blob for upload
+        // Small: 1600px max, 0.7 quality (~200-400KB)
+        // Big: 2400px max, 0.85 quality (~500KB-1MB)
+        const maxDim = photoSize === "big" ? 2400 : 1600;
+        const quality = photoSize === "big" ? 0.85 : 0.7;
         const [imageBlob, thumbDataUrl] = await Promise.all([
-          compressImage(files[i], 1600, 0.7, true), // returnBlob=true
+          compressImage(files[i], maxDim, quality, true), // returnBlob=true
           makeThumbnail(files[i]),
         ]);
 
@@ -2638,23 +2645,48 @@ function DailyEntry({ state, dispatch }) {
 
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={CheckCircle2}>Milestone Check-In</SectionTitle>
-        <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>Was a milestone completed or hit today?</p>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-          {project.milestones.filter(m => (m.status || (m.actualDate ? "complete" : "not_started")) !== "complete").map(m => (
-            <button key={m.id} onClick={() => update({ milestoneHit: report.milestoneHit?.id === m.id ? null : { id: m.id, date: report.date } })}
-              style={{
-                padding: "8px 14px", borderRadius: T.radius.md, cursor: "pointer",
-                border: `1.5px solid ${report.milestoneHit?.id === m.id ? T.green[500] : T.neutral[200]}`,
-                background: report.milestoneHit?.id === m.id ? T.green[100] : T.white,
-                color: report.milestoneHit?.id === m.id ? T.green[500] : T.navy[700],
-                fontSize: "13px", fontWeight: 500, transition: "all 0.15s",
-              }}>
-              {report.milestoneHit?.id === m.id && <Check size={14} style={{ marginRight: "6px", verticalAlign: "-2px" }} />}
-              {m.description}
-            </button>
-          ))}
-          {project.milestones.filter(m => (m.status || (m.actualDate ? "complete" : "not_started")) !== "complete").length === 0 && (
-            <span style={{ fontSize: "13px", color: T.neutral[400] }}>All milestones have been completed</span>
+        <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>Click to cycle status: Not Started → In Progress → Complete</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          {(project.milestones || []).map(m => {
+            const status = m.status || (m.actualDate ? "complete" : "not_started");
+            const statusColors = {
+              not_started: { bg: T.neutral[100], text: T.neutral[500], border: T.neutral[200], label: "Not Started" },
+              in_progress: { bg: T.yellow[100], text: T.yellow[700], border: T.yellow[400], label: "In Progress" },
+              complete: { bg: T.green[100], text: T.green[600], border: T.green[500], label: "Complete" },
+            };
+            const statusStyle = statusColors[status] || statusColors.not_started;
+            const cycleStatus = () => {
+              const nextStatus = status === "not_started" ? "in_progress" : status === "in_progress" ? "complete" : "not_started";
+              dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: nextStatus, actualDate: nextStatus === "complete" ? toISODate(new Date()) : "" } });
+            };
+            return (
+              <button key={m.id} onClick={cycleStatus}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "10px 14px", borderRadius: T.radius.md, cursor: "pointer",
+                  border: `1.5px solid ${statusStyle.border}`,
+                  background: status === "complete" ? T.green[50] : T.white,
+                  transition: "all 0.15s", textAlign: "left",
+                }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
+                  {status === "complete" && <Check size={16} style={{ color: T.green[500], flexShrink: 0 }} />}
+                  <span style={{ fontSize: "13px", fontWeight: 500, color: status === "complete" ? T.green[600] : T.navy[700], textDecoration: status === "complete" ? "line-through" : "none" }}>
+                    {m.description}
+                  </span>
+                </div>
+                <span style={{
+                  fontSize: "11px", fontWeight: 600, padding: "3px 8px", borderRadius: "4px",
+                  background: statusStyle.bg,
+                  color: statusStyle.text,
+                  flexShrink: 0, marginLeft: "12px",
+                }}>
+                  {statusStyle.label}
+                </span>
+              </button>
+            );
+          })}
+          {(project.milestones || []).length === 0 && (
+            <span style={{ fontSize: "13px", color: T.neutral[400] }}>No milestones defined. Add them in Project Setup.</span>
           )}
         </div>
       </Card>
@@ -2663,13 +2695,36 @@ function DailyEntry({ state, dispatch }) {
         <SectionTitle icon={Camera}>Progress Photos</SectionTitle>
         <input type="file" accept="image/*,.heic,.heif" multiple ref={fileInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
         <input type="file" accept="image/*,.heic,.heif" capture="environment" ref={cameraInputRef} onChange={handleFileSelect} style={{ display: "none" }} />
-        <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+        <div style={{ display: "flex", gap: "8px", marginBottom: "8px", alignItems: "center" }}>
           <Input placeholder="Photo title (optional)..." value={photoDesc} onChange={e => setPhotoDesc(e.target.value)} style={{ flex: 1 }} />
-          <Btn icon={Upload} variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={!!uploadProgress}>
-            {uploadProgress ? `${uploadProgress.done}/${uploadProgress.total}` : "Upload"}
-          </Btn>
-          <Btn icon={Camera} variant="secondary" onClick={() => cameraInputRef.current?.click()} disabled={!!uploadProgress}>Camera</Btn>
+          <div style={{ display: "flex", borderRadius: T.radius.md, overflow: "hidden", border: `1px solid ${T.neutral[200]}` }}>
+            <button onClick={() => setPhotoSize("small")}
+              style={{
+                padding: "8px 12px", fontSize: "12px", fontWeight: 600, border: "none", cursor: "pointer",
+                background: photoSize === "small" ? T.navy[600] : T.white,
+                color: photoSize === "small" ? T.white : T.neutral[500],
+              }}>
+              Small
+            </button>
+            <button onClick={() => setPhotoSize("big")}
+              style={{
+                padding: "8px 12px", fontSize: "12px", fontWeight: 600, border: "none", cursor: "pointer",
+                background: photoSize === "big" ? T.navy[600] : T.white,
+                color: photoSize === "big" ? T.white : T.neutral[500],
+              }}>
+              Big
+            </button>
+          </div>
         </div>
+        <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+          <Btn icon={Upload} variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={!!uploadProgress} style={{ flex: 1 }}>
+            {uploadProgress ? `${uploadProgress.done}/${uploadProgress.total}` : "Upload Photos"}
+          </Btn>
+          <Btn icon={Camera} variant="secondary" onClick={() => cameraInputRef.current?.click()} disabled={!!uploadProgress} style={{ flex: 1 }}>Camera</Btn>
+        </div>
+        <p style={{ fontSize: "11px", color: T.neutral[400], marginBottom: "12px" }}>
+          {photoSize === "small" ? "Small: ~200-400KB per photo, good for reports" : "Big: ~500KB-1MB per photo, better detail"}
+        </p>
         {uploadProgress && (
           <div style={{ marginBottom: "12px", background: T.neutral[50], border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md, padding: "12px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px", color: T.neutral[500], marginBottom: "6px" }}>
@@ -2762,6 +2817,11 @@ function DailyEntry({ state, dispatch }) {
                     ) : (
                       <div style={{ height: "140px", display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <Camera size={32} style={{ color: T.neutral[300] }} />
+                      </div>
+                    )}
+                    {isBase64Url(p.url) && (
+                      <div style={{ background: T.yellow[100], padding: "3px 10px", fontSize: "10px", fontWeight: 700, color: T.yellow[700], textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: "4px" }}>
+                        <CloudOff size={10} /> Pending Upload
                       </div>
                     )}
                     {p.starred && (
@@ -3400,7 +3460,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
   const completedMilestones = project.milestones?.filter(m => (m.status || (m.actualDate ? "complete" : "not_started")) === "complete")?.length || 0;
   const totalMilestones = project.milestones?.length || 0;
   const allPhotos = projectDailies.flatMap(r => (r.photos || []).map(p => ({ ...p, date: r.date })));
-  const recentDelays = projectDailies.slice(0, 7).filter(r => r.delaysProblems).map(r => ({ date: r.date, issue: r.delaysProblems }));
+  const recentDelays = projectDailies.slice(0, 7).filter(r => r.delaysProblems && !isNoIncident(r.delaysProblems)).map(r => ({ date: r.date, issue: r.delaysProblems }));
 
   // AI Q&A handler
   const handleAskQuestion = async () => {
@@ -3684,7 +3744,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                       <div style={{ fontSize: "14px", color: T.white, fontWeight: 500 }}>{fmtDateShort(r.date)}</div>
                       <div style={{ fontSize: "12px", color: T.navy[400] }}>{r.weather}{r.temperature ? ` · ${r.temperature}` : ""}</div>
                     </div>
-                    {r.delaysProblems && <span style={{ background: "#dc2626", color: T.white, padding: "2px 8px", borderRadius: "4px", fontSize: "10px", fontWeight: 600 }}>DELAY</span>}
+                    {r.delaysProblems && !isNoIncident(r.delaysProblems) && <span style={{ background: "#dc2626", color: T.white, padding: "2px 8px", borderRadius: "4px", fontSize: "10px", fontWeight: 600 }}>DELAY</span>}
                   </div>
                 ))}
                 {projectDailies.length === 0 && <p style={{ color: T.navy[400], fontSize: "13px" }}>No reports yet.</p>}
@@ -3735,7 +3795,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                       </div>
                     </div>
                     {r.generalNotes && <p style={{ fontSize: "14px", color: T.white, lineHeight: 1.6, marginBottom: "12px" }}>{r.generalNotes}</p>}
-                    {r.delaysProblems && (
+                    {r.delaysProblems && !isNoIncident(r.delaysProblems) && (
                       <div style={{ background: "rgba(220,38,38,0.2)", border: "1px solid rgba(220,38,38,0.3)", borderRadius: "8px", padding: "12px", marginTop: "8px" }}>
                         <div style={{ fontSize: "11px", color: "#fca5a5", fontWeight: 600, marginBottom: "4px" }}>DELAYS / PROBLEMS</div>
                         <div style={{ fontSize: "13px", color: T.white }}>{r.delaysProblems}</div>
@@ -3943,6 +4003,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [online, setOnline] = useState(isOnline());
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [pendingPhotosCount, setPendingPhotosCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const loadedRef = useRef(false);
   const prevProjectsRef = useRef(null);
@@ -4079,11 +4140,72 @@ export default function App() {
       }
       await clearPendingSyncs();
       setPendingSyncCount(0);
+
+      // Sync any offline photos (base64 URLs) to Supabase Storage
+      await syncOfflinePhotos();
+
       console.log("Sync complete");
     } catch (err) {
       console.error("Sync failed:", err);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Upload offline photos (stored as base64) to Supabase Storage
+  const syncOfflinePhotos = async () => {
+    if (!isOnline()) return;
+
+    let photosUploaded = 0;
+
+    // Sync daily report photos
+    for (const report of state.dailyReports) {
+      const photos = report.photos || [];
+      const hasOfflinePhotos = photos.some(p => isBase64Url(p.url));
+
+      if (hasOfflinePhotos) {
+        const updatedPhotos = [];
+        for (const photo of photos) {
+          if (isBase64Url(photo.url)) {
+            // Upload base64 photo to Supabase
+            const { url, path } = await uploadBase64Photo(photo.url, report.projectId, report.id);
+            updatedPhotos.push({ ...photo, url, storagePath: path });
+            if (!isBase64Url(url)) photosUploaded++;
+          } else {
+            updatedPhotos.push(photo);
+          }
+        }
+        // Update the report with cloud URLs
+        const updatedReport = { ...report, photos: updatedPhotos };
+        dispatch({ type: "UPDATE_DAILY_PHOTOS", reportId: report.id, photos: updatedPhotos });
+        await saveDailyReport(updatedReport);
+      }
+    }
+
+    // Sync weekly report photos
+    for (const report of state.weeklyReports) {
+      const photos = report.selectedPhotos || [];
+      const hasOfflinePhotos = photos.some(p => isBase64Url(p.url));
+
+      if (hasOfflinePhotos) {
+        const updatedPhotos = [];
+        for (const photo of photos) {
+          if (isBase64Url(photo.url)) {
+            const { url, path } = await uploadBase64Photo(photo.url, report.projectId, report.id);
+            updatedPhotos.push({ ...photo, url, storagePath: path });
+            if (!isBase64Url(url)) photosUploaded++;
+          } else {
+            updatedPhotos.push(photo);
+          }
+        }
+        const updatedReport = { ...report, selectedPhotos: updatedPhotos };
+        dispatch({ type: "UPDATE_WEEKLY_PHOTOS", reportId: report.id, photos: updatedPhotos });
+        await saveWeeklyReport(updatedReport);
+      }
+    }
+
+    if (photosUploaded > 0) {
+      console.log(`Synced ${photosUploaded} offline photos to cloud`);
     }
   };
 
@@ -4192,6 +4314,22 @@ export default function App() {
     });
   }, [state.dailyReports]);
 
+  // Count pending photos (base64 URLs that need to be uploaded)
+  useEffect(() => {
+    let count = 0;
+    state.dailyReports.forEach(r => {
+      (r.photos || []).forEach(p => {
+        if (isBase64Url(p.url)) count++;
+      });
+    });
+    state.weeklyReports.forEach(r => {
+      (r.selectedPhotos || []).forEach(p => {
+        if (isBase64Url(p.url)) count++;
+      });
+    });
+    setPendingPhotosCount(count);
+  }, [state.dailyReports, state.weeklyReports]);
+
   const renderView = () => {
     switch (state.currentView) {
       case "projects": return <ProjectsList state={state} dispatch={dispatch} />;
@@ -4238,7 +4376,7 @@ export default function App() {
       <a href="#main-content" className="skip-link">Skip to main content</a>
       <div style={{ minHeight: "100vh", background: T.neutral[50] }}>
         {/* Offline/Sync Status Bar */}
-        {(!online || pendingSyncCount > 0) && (
+        {(!online || pendingSyncCount > 0 || pendingPhotosCount > 0) && (
           <div style={{
             position: "fixed", bottom: 0, left: 0, right: 0,
             background: online ? T.orange[500] : T.navy[800],
@@ -4250,19 +4388,30 @@ export default function App() {
               <>
                 <WifiOff size={18} />
                 <span>You're offline — changes saved locally</span>
-                {pendingSyncCount > 0 && <span style={{ background: T.orange[500], padding: "2px 8px", borderRadius: "10px", fontSize: "11px" }}>{pendingSyncCount} pending</span>}
+                {(pendingSyncCount > 0 || pendingPhotosCount > 0) && (
+                  <span style={{ background: T.orange[500], padding: "2px 8px", borderRadius: "10px", fontSize: "11px" }}>
+                    {pendingSyncCount > 0 && `${pendingSyncCount} changes`}
+                    {pendingSyncCount > 0 && pendingPhotosCount > 0 && ", "}
+                    {pendingPhotosCount > 0 && `${pendingPhotosCount} photos`}
+                  </span>
+                )}
               </>
-            ) : pendingSyncCount > 0 ? (
+            ) : (pendingSyncCount > 0 || pendingPhotosCount > 0) ? (
               <>
                 {syncing ? (
                   <>
                     <RefreshCw size={18} style={{ animation: "spin 1s linear infinite" }} />
-                    <span>Syncing {pendingSyncCount} changes...</span>
+                    <span>Syncing{pendingSyncCount > 0 ? ` ${pendingSyncCount} changes` : ""}{pendingPhotosCount > 0 ? ` ${pendingPhotosCount} photos` : ""}...</span>
                   </>
                 ) : (
                   <>
                     <CloudOff size={18} />
-                    <span>{pendingSyncCount} changes waiting to sync</span>
+                    <span>
+                      {pendingSyncCount > 0 && `${pendingSyncCount} changes`}
+                      {pendingSyncCount > 0 && pendingPhotosCount > 0 && " + "}
+                      {pendingPhotosCount > 0 && `${pendingPhotosCount} photos`}
+                      {" waiting to sync"}
+                    </span>
                     <button onClick={syncPendingChanges} style={{
                       background: T.white, color: T.orange[600], border: "none",
                       padding: "4px 12px", borderRadius: "4px", cursor: "pointer",
@@ -4292,7 +4441,7 @@ export default function App() {
         )}
         <Sidebar currentView={state.currentView} dispatch={dispatch} projects={state.projects} activeProjectId={state.activeProjectId} />
         <MobileNav currentView={state.currentView} dispatch={dispatch} projects={state.projects} activeProjectId={state.activeProjectId} />
-        <main id="main-content" className="main-content" style={{ marginLeft: "220px", padding: "32px", minHeight: "100vh", paddingBottom: (!online || pendingSyncCount > 0) ? "80px" : "32px" }} role="main">
+        <main id="main-content" className="main-content" style={{ marginLeft: "220px", padding: "32px", minHeight: "100vh", paddingBottom: (!online || pendingSyncCount > 0 || pendingPhotosCount > 0) ? "80px" : "32px" }} role="main">
           {renderView()}
         </main>
       </div>
