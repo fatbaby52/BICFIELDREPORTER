@@ -4242,6 +4242,34 @@ export default function App() {
     }
   };
 
+  // Auto-sync pending photos on startup (when online)
+  const initialSyncDoneRef = useRef(false);
+  useEffect(() => {
+    if (!loadedRef.current || state.loading || initialSyncDoneRef.current) return;
+    if (!isOnline()) return;
+
+    // Check if there are any base64 photos that need syncing
+    let hasBase64Photos = false;
+    state.dailyReports.forEach(r => {
+      (r.photos || []).forEach(p => {
+        if (isBase64Url(p.url)) hasBase64Photos = true;
+      });
+    });
+    state.weeklyReports.forEach(r => {
+      (r.selectedPhotos || []).forEach(p => {
+        if (isBase64Url(p.url)) hasBase64Photos = true;
+      });
+    });
+
+    if (hasBase64Photos) {
+      console.log("Auto-syncing pending photos on startup...");
+      initialSyncDoneRef.current = true;
+      syncPendingChanges();
+    } else {
+      initialSyncDoneRef.current = true;
+    }
+  }, [state.loading, state.dailyReports, state.weeklyReports]);
+
   // Save state to IndexedDB whenever it changes
   useEffect(() => {
     if (!loadedRef.current || state.loading) return;
