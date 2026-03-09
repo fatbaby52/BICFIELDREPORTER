@@ -689,6 +689,7 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:11px;color:#1a2744;padding:0;margin:0;background:#f8fafc}
+  @media print{body{visibility:hidden}body.ready-to-print{visibility:visible}}
   .page{max-width:900px;width:100%;margin:0 auto;padding:24px}
   .masthead{background:linear-gradient(135deg,#1a2744 0%,#0f172a 100%);padding:32px;margin:-24px -24px 24px;position:relative;overflow:hidden}
   .masthead::before{content:'';position:absolute;top:0;right:0;width:300px;height:100%;background:linear-gradient(135deg,#e8853a 0%,#f59e0b 100%);transform:skewX(-20deg) translateX(150px);opacity:0.15}
@@ -851,16 +852,19 @@ window.onload = async () => {
   img.style.width = '100%';
   img.style.maxWidth = '900px';
   img.style.display = 'block';
-  img.style.margin = '0 auto';
+  img.style.margin = '0';
 
+  // Clear everything and add just the image
   document.body.innerHTML = '';
-  document.body.style.margin = '0';
-  document.body.style.padding = '20px';
-  document.body.style.background = '#fff';
+  document.body.style.cssText = 'margin:0;padding:0;background:#fff;';
+  document.head.innerHTML = '<style>@page{margin:10mm}body{margin:0!important;padding:0!important}img{width:100%!important;max-width:none!important;page-break-inside:avoid}</style>';
   document.body.appendChild(img);
 
   // Print after image is ready
-  img.onload = () => window.print();
+  img.onload = () => {
+    document.body.classList.add('ready-to-print');
+    window.print();
+  };
 };
 </script></body></html>`;
 
