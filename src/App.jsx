@@ -748,7 +748,10 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
     tr:nth-child(even){background:#f3f4f6!important}
     .info-box{background:#fff!important;border:2px solid #d1d5db!important}
     .info-box.alert{background:#fef2f2!important;border-color:#ef4444!important}
-    .date-box{background:#2d3a4f!important;border:1px solid #4b5563}
+    .date-box{background:#f3f4f6!important;border:2px solid #1a2744!important}
+    .date-box .date{color:#1a2744!important}
+    .date-box .meta{color:#4b5563!important}
+    .date-box div{color:#1a2744!important}
     .down{background:#fef2f2!important}
     .photo-card{border:2px solid #e5e7eb!important}
     .section-title{page-break-after:avoid}
