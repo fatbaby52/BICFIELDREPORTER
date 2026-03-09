@@ -738,9 +738,10 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
     .photo-card{page-break-inside:avoid}
     .photo-card img{height:140px!important;object-fit:cover!important}
     /* Ensure backgrounds print with solid colors (gradients can fail) */
-    .masthead{margin:0 0 20px;border-radius:8px;background:#1a2744!important;border:2px solid #1a2744}
+    .masthead{margin:0 0 20px;border-radius:8px;background:#1a2744!important;border:2px solid #1a2744;overflow:visible!important;padding:20px!important}
     .masthead::before{display:none!important}
-    .masthead-content{position:relative;display:flex!important;justify-content:space-between!important;align-items:flex-start!important}
+    .masthead-content{position:relative;display:flex!important;justify-content:space-between!important;align-items:flex-start!important;gap:20px!important}
+    .masthead-content>div:first-child{flex:1!important;min-width:0!important}
     .date-box{flex-shrink:0!important;min-width:180px!important}
     .section{background:#fff!important;border:2px solid #e5e7eb!important;margin-bottom:12px!important}
     th{background:#1a2744!important;color:#fff!important}
