@@ -830,7 +830,39 @@ ${includePhotos && (report.photos || []).filter(p => p.starred).length > 0 ? `
 
 <div class="footer">Report prepared by <strong>${report.preparedBy || "—"}</strong> · Generated ${new Date().toLocaleDateString()}</div>
 </div>
-<script>window.onload=()=>window.print()</script></body></html>`;
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script>
+window.onload = async () => {
+  // Wait for fonts and images to load
+  await document.fonts.ready;
+  await new Promise(r => setTimeout(r, 500));
+
+  const page = document.querySelector('.page');
+  const canvas = await html2canvas(page, {
+    scale: 2,
+    useCORS: true,
+    allowTaint: true,
+    backgroundColor: '#f8fafc'
+  });
+
+  // Replace page content with the canvas image
+  const img = document.createElement('img');
+  img.src = canvas.toDataURL('image/png');
+  img.style.width = '100%';
+  img.style.maxWidth = '900px';
+  img.style.display = 'block';
+  img.style.margin = '0 auto';
+
+  document.body.innerHTML = '';
+  document.body.style.margin = '0';
+  document.body.style.padding = '20px';
+  document.body.style.background = '#fff';
+  document.body.appendChild(img);
+
+  // Print after image is ready
+  img.onload = () => window.print();
+};
+</script></body></html>`;
 
   const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
