@@ -3647,10 +3647,11 @@ function DailyEntry({ state, dispatch }) {
 // ─── Daily View Component ────────────────────────────────────
 function DailyView({ state, dispatch }) {
   const report = state.viewingDaily;
-  const project = getActiveProject(state);
+  // Get project by report's projectId to ensure we get the correct project's milestones
+  const project = state.projects.find(p => p.id === report?.projectId) || getActiveProject(state);
   const [includePhotos, setIncludePhotos] = React.useState(true);
 
-  if (!report) return null;
+  if (!report || !project) return null;
 
   const allEquip = [...project.equipmentOwned.map(e => ({ ...e, type: "Owned" })), ...project.equipmentRented.map(e => ({ ...e, type: "Rented" }))];
   const presentEquip = allEquip.filter(e => report.equipmentPresent.includes(e.id));
@@ -3773,6 +3774,82 @@ function DailyView({ state, dispatch }) {
           </Card>
         ))}
       </div>
+
+      {/* Milestone Status Section */}
+      <Card style={{ marginBottom: "16px" }}>
+        <div style={{ fontSize: "12px", fontWeight: 700, color: T.orange[500], textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "12px" }}>Milestone Status</div>
+        {(project.milestones || []).length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {(project.milestones || []).map(m => {
+              const completionDate = m.completionDate || m.actualDate || "";
+              const startDate = m.startDate || m.inProgressDate || "";
+              let status = "not_started";
+              if (completionDate && completionDate <= report.date) status = "complete";
+              else if (startDate && startDate <= report.date) status = "in_progress";
+              const statusColors = {
+                not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Not Started" },
+                in_progress: { bg: T.yellow[100], text: T.yellow[700], label: "In Progress" },
+                complete: { bg: T.green[100], text: T.green[600], label: "Complete" },
+              };
+              const statusStyle = statusColors[status];
+              return (
+                <div key={m.id} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "10px 14px", borderRadius: T.radius.md,
+                  background: status === "complete" ? T.green[50] : T.neutral[50],
+                  border: `1px solid ${status === "complete" ? T.green[500] : status === "in_progress" ? T.yellow[400] : T.neutral[200]}`,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
+                    {status === "complete" && <Check size={16} style={{ color: T.green[500], flexShrink: 0 }} />}
+                    {status === "in_progress" && <Clock size={16} style={{ color: T.yellow[600], flexShrink: 0 }} />}
+                    {status === "not_started" && <Circle size={16} style={{ color: T.neutral[400], flexShrink: 0 }} />}
+                    <span style={{ fontSize: "13px", fontWeight: 500, color: status === "complete" ? T.green[600] : T.navy[700], textDecoration: status === "complete" ? "line-through" : "none" }}>
+                      {m.description}
+                    </span>
+                  </div>
+                  <span style={{
+                    fontSize: "11px", fontWeight: 600, padding: "3px 8px", borderRadius: "4px",
+                    background: statusStyle.bg, color: statusStyle.text, flexShrink: 0, marginLeft: "12px",
+                  }}>
+                    {statusStyle.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p style={{ fontSize: "13px", color: T.neutral[400] }}>No milestones defined for this project.</p>
+        )}
+      </Card>
+
+      {/* Task Hours Section */}
+      {(report.taskHours || []).length > 0 && (() => {
+        const normalizedMilestones = getNormalizedMilestones(project);
+        const totalHours = (report.taskHours || []).reduce((sum, h) => sum + (h.hours || 0), 0);
+        return (
+          <Card style={{ marginBottom: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: T.orange[500], textTransform: "uppercase", letterSpacing: "0.06em" }}>Task Hours Logged</div>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: T.orange[500] }}>{totalHours}h total</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              {report.taskHours.filter(h => h.hours > 0).map(h => {
+                const milestone = normalizedMilestones.find(m => m.id === h.milestoneId);
+                const task = (milestone?.tasks || []).find(t => t.id === h.taskId);
+                return (
+                  <div key={`${h.milestoneId}-${h.taskId}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: T.neutral[50], borderRadius: T.radius.sm }}>
+                    <div>
+                      <span style={{ fontSize: "13px", fontWeight: 500, color: T.navy[700] }}>{task?.description || "(Unknown task)"}</span>
+                      <span style={{ fontSize: "11px", color: T.neutral[400], marginLeft: "8px" }}>— {milestone?.description || "(Unknown milestone)"}</span>
+                    </div>
+                    <span style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800], background: T.orange[100], padding: "2px 8px", borderRadius: "4px" }}>{h.hours}h</span>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })()}
 
       <div style={{ textAlign: "right", fontSize: "13px", color: T.neutral[500], padding: "8px 0" }}>
         Report prepared by <span style={{ fontWeight: 600, color: T.navy[700] }}>{report.preparedBy}</span>
