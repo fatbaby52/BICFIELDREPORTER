@@ -494,113 +494,85 @@ const getWeekStart = (d) => {
   return toISODate(dt);
 };
 
-// Calculate milestone schedule based on tasks and logged hours
-const calculateMilestoneSchedule = (milestone, allTaskHours, numActiveMilestones = 1) => {
-  const tasks = milestone.tasks || [];
-  if (tasks.length === 0) return null;
+// ─── Task Normalization (backwards compat) ──────────────────
+// Converts old milestone format OR new flat task format into canonical task objects
+const normalizeTask = (t, index = 0) => ({
+  id: t.id || `task-${Date.now()}-${index}`,
+  description: t.description || "",
+  targetDate: t.targetDate || "",
+  actualCompletionDate: t.actualCompletionDate || t.completionDate || t.actualDate || "",
+  expectedDuration: t.expectedDuration || 0,
+  status: t.status || "not_started",
+  isMilestone: t.isMilestone !== undefined ? t.isMilestone : false,
+  isDelay: t.isDelay !== undefined ? t.isDelay : false,
+  sortOrder: t.sortOrder !== undefined ? t.sortOrder : index,
+});
 
-  const startDate = milestone.startDate || milestone.inProgressDate || toISODate(new Date());
-  const capacityPerMilestone = DAILY_CAPACITY / Math.max(1, numActiveMilestones);
+// Normalize project tasks — handles both old milestones[] and new tasks[] formats
+const normalizeProjectTasks = (project) => {
+  // New format: project already has flat tasks array with isMilestone field
+  if (project.tasks && Array.isArray(project.tasks) && project.tasks.length > 0) {
+    // Check if it's already new format (has isMilestone field)
+    if (project.tasks[0].isMilestone !== undefined || project.tasks[0].isDelay !== undefined) {
+      return project.tasks.map((t, i) => normalizeTask(t, i)).sort((a, b) => a.sortOrder - b.sortOrder);
+    }
+  }
 
-  let totalEstimated = 0;
-  let totalActual = 0;
-  let remainingHours = 0;
+  // Old format: milestones array with nested tasks
+  if (project.milestones && Array.isArray(project.milestones) && project.milestones.length > 0) {
+    // Check if these look like old milestones (have tasks[] array or lack isMilestone)
+    const first = project.milestones[0];
+    if (first.isMilestone !== undefined) {
+      // Already migrated data stored in milestones column
+      return project.milestones.map((t, i) => normalizeTask(t, i)).sort((a, b) => a.sortOrder - b.sortOrder);
+    }
+    // Migrate: each old milestone becomes a task with isMilestone: true
+    return project.milestones.map((m, i) => normalizeTask({
+      id: m.id,
+      description: m.description,
+      targetDate: m.targetDate || "",
+      actualCompletionDate: m.completionDate || m.actualDate || "",
+      expectedDuration: 0,
+      status: m.status || (m.completionDate || m.actualDate ? "complete" : "not_started"),
+      isMilestone: true,
+      isDelay: false,
+      sortOrder: i,
+    }, i));
+  }
 
-  const taskSchedules = tasks.map(t => {
-    const estimated = parseFloat(t.estimatedHours) || 0;
-    const actual = allTaskHours
-      .filter(h => h.milestoneId === milestone.id && h.taskId === t.id)
-      .reduce((sum, h) => sum + (h.hours || 0), 0);
-    const remaining = t.status === "complete" ? 0 : Math.max(0, estimated - actual);
+  // If project has tasks array (new format via db mapping)
+  if (project.tasks && Array.isArray(project.tasks)) {
+    return project.tasks.map((t, i) => normalizeTask(t, i)).sort((a, b) => a.sortOrder - b.sortOrder);
+  }
 
-    totalEstimated += estimated;
-    totalActual += actual;
-    remainingHours += remaining;
-
-    return { ...t, estimated, actual, remaining };
-  });
-
-  const daysRemaining = remainingHours / capacityPerMilestone;
-  const projectedCompletion = addWorkDays(toISODate(new Date()), daysRemaining);
-
-  return {
-    milestoneId: milestone.id,
-    description: milestone.description,
-    startDate,
-    targetDate: milestone.targetDate || "",
-    totalEstimated,
-    totalActual,
-    remainingHours,
-    daysRemaining: Math.ceil(daysRemaining),
-    projectedCompletion,
-    tasks: taskSchedules,
-    isOnTrack: !milestone.targetDate || projectedCompletion <= milestone.targetDate,
-  };
+  return [];
 };
 
-// Generate 3-week look-ahead from active milestones
-const generateLookAhead = (milestones, allTaskHours, weeksAhead = 3) => {
-  const normalizedMilestones = milestones.map(normalizeMilestone);
+// Get normalized tasks for a project
+const getNormalizedTasks = (project) => normalizeProjectTasks(project);
+
+// Generate look-ahead data from tasks
+const generateLookAhead = (tasks, weeksAhead = 3) => {
   const today = toISODate(new Date());
 
-  // Find active milestones (started but not complete)
-  const activeMilestones = normalizedMilestones.filter(m => {
-    const startDate = m.startDate || m.inProgressDate || "";
-    const completionDate = m.completionDate || m.actualDate || "";
-    return startDate && startDate <= today && (!completionDate || completionDate > today);
+  // Find active tasks (in progress)
+  const activeTasks = tasks.filter(t => {
+    return t.status === "in_progress" && !t.isDelay;
   });
 
-  if (activeMilestones.length === 0) return { weeks: [], activeMilestones: [] };
+  if (activeTasks.length === 0) return { weeks: [], activeTasks: [] };
 
-  const capacityPerMilestone = DAILY_CAPACITY / Math.max(1, activeMilestones.length);
-  const hoursPerWeek = capacityPerMilestone * 5; // 5 work days
-
-  // Calculate schedules for each active milestone
-  const schedules = activeMilestones.map(m => calculateMilestoneSchedule(m, allTaskHours, activeMilestones.length));
-
-  // Build a work queue of tasks with remaining hours (mutable copy)
-  const taskQueue = [];
-  schedules.forEach(schedule => {
-    if (!schedule) return;
-    schedule.tasks.forEach(t => {
-      if (t.status !== "complete" && t.remaining > 0) {
-        taskQueue.push({
-          milestoneId: schedule.milestoneId,
-          milestoneDesc: schedule.description,
-          taskId: t.id,
-          taskDesc: t.description || "(Unnamed task)",
-          remaining: t.remaining,
-        });
-      }
-    });
-  });
-
-  // Generate week-by-week breakdown, consuming hours from the queue
+  // Build week-by-week breakdown
   const weeks = [];
   for (let w = 0; w < weeksAhead; w++) {
     const weekStart = getWeekStart(addWorkDays(today, w * 5));
     const weekEnd = addWorkDays(weekStart, 4);
-    const weekTasks = [];
-    let weekHoursRemaining = hoursPerWeek * activeMilestones.length; // Total capacity this week
-
-    for (const task of taskQueue) {
-      if (task.remaining <= 0) continue;
-      if (weekHoursRemaining <= 0) break;
-
-      const hoursThisWeek = Math.min(task.remaining, weekHoursRemaining);
-      if (hoursThisWeek > 0) {
-        weekTasks.push({
-          milestoneId: task.milestoneId,
-          milestoneDesc: task.milestoneDesc,
-          taskId: task.taskId,
-          taskDesc: task.taskDesc,
-          hoursPlanned: Math.round(hoursThisWeek * 10) / 10,
-          totalRemaining: task.remaining,
-        });
-        task.remaining -= hoursThisWeek;
-        weekHoursRemaining -= hoursThisWeek;
-      }
-    }
+    const weekTasks = activeTasks.map(t => ({
+      taskId: t.id,
+      taskDesc: t.description || "(Unnamed task)",
+      expectedDuration: t.expectedDuration || 0,
+      isMilestone: t.isMilestone,
+    }));
 
     weeks.push({
       weekNum: w + 1,
@@ -611,7 +583,7 @@ const generateLookAhead = (milestones, allTaskHours, weeksAhead = 3) => {
     });
   }
 
-  return { weeks, schedules, activeMilestones };
+  return { weeks, activeTasks };
 };
 
 // ─── BIC Logo ───────────────────────────────────────────────
@@ -670,10 +642,10 @@ const exportDailyExcel = (report, project) => {
 
 // BIC Logo as inline SVG for PDF exports
 const BIC_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60" style="height:40px">
-  <rect width="200" height="60" rx="4" fill="#1a2744"/>
-  <text x="12" y="42" font-family="Georgia, serif" font-size="36" font-weight="bold" fill="#fff">BIC</text>
+  <rect width="200" height="60" rx="4" fill="#ffffff" stroke="#e5e7eb"/>
+  <text x="12" y="42" font-family="Georgia, serif" font-size="36" font-weight="bold" fill="#1a2744">BIC</text>
   <text x="90" y="38" font-family="Georgia, serif" font-size="16" font-style="italic" fill="#e8853a">the Original.</text>
-  <text x="12" y="54" font-family="system-ui, sans-serif" font-size="8" fill="#8899b4">Blue Iron Corp. | Ca. License #65233</text>
+  <text x="12" y="54" font-family="system-ui, sans-serif" font-size="8" fill="#6b7280">Blue Iron Corp. | Ca. License #65233</text>
 </svg>`;
 
 const exportDailyPDF = (report, project, includePhotos = false) => {
@@ -688,30 +660,30 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:11px;color:#1a2744;padding:0;margin:0;background:#f8fafc}
+  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:11px;color:#1a2744;padding:0;margin:0;background:#ffffff}
   @media print{body{visibility:hidden}body.ready-to-print{visibility:visible}}
   .page{max-width:900px;width:100%;margin:0 auto;padding:24px}
-  .masthead{background:linear-gradient(135deg,#1a2744 0%,#0f172a 100%);padding:32px;margin:-24px -24px 24px;position:relative;overflow:hidden}
-  .masthead::before{content:'';position:absolute;top:0;right:0;width:300px;height:100%;background:linear-gradient(135deg,#e8853a 0%,#f59e0b 100%);transform:skewX(-20deg) translateX(150px);opacity:0.15}
+  .masthead{background:#ffffff;padding:32px;margin:-24px -24px 24px;position:relative;overflow:hidden;border-bottom:3px solid #e8853a}
+  .masthead::before{content:'';position:absolute;top:0;right:0;width:300px;height:100%;background:linear-gradient(135deg,#e8853a 0%,#f59e0b 100%);transform:skewX(-20deg) translateX(150px);opacity:0.06}
   .masthead-content{position:relative;display:flex;justify-content:space-between;align-items:flex-start}
-  .masthead h1{font-size:24px;font-weight:800;color:#fff;margin:12px 0 4px;letter-spacing:-0.02em}
-  .masthead .subtitle{font-size:13px;color:#8899b4}
+  .masthead h1{font-size:24px;font-weight:800;color:#1a2744;margin:12px 0 4px;letter-spacing:-0.02em}
+  .masthead .subtitle{font-size:13px;color:#6b7280}
   .masthead .report-type{display:inline-block;background:#e8853a;color:#fff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;padding:6px 14px;border-radius:4px;margin-top:12px}
-  .masthead .date-box{text-align:right;background:rgba(255,255,255,0.1);padding:16px 20px;border-radius:8px;backdrop-filter:blur(4px)}
-  .masthead .date{font-size:20px;font-weight:800;color:#fff}
-  .masthead .meta{font-size:12px;color:#8899b4;margin-top:4px}
+  .masthead .date-box{text-align:right;background:#f9fafb;padding:16px 20px;border-radius:8px;border:1px solid #e5e7eb}
+  .masthead .date{font-size:20px;font-weight:800;color:#1a2744}
+  .masthead .meta{font-size:12px;color:#6b7280;margin-top:4px}
   .section{background:#fff;border-radius:12px;padding:20px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
   .section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#e8853a;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #1a2744;display:flex;align-items:center;gap:8px}
   .section-title::before{content:'';width:4px;height:16px;background:#e8853a;border-radius:2px}
   .notes{line-height:1.8;font-size:12px;color:#374151;white-space:pre-wrap}
   table{width:100%;border-collapse:collapse;font-size:12px}
-  th{background:linear-gradient(135deg,#1a2744 0%,#0f172a 100%);color:#fff;padding:10px 14px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.05em}
+  th{background:#f3f4f6;color:#1a2744;padding:10px 14px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid #e5e7eb}
   th:first-child{border-radius:8px 0 0 0}
   th:last-child{border-radius:0 8px 0 0}
   td{padding:10px 14px;border-bottom:1px solid #e5e7eb}
   tr:nth-child(even){background:#f9fafb}
   tr:hover{background:#f3f4f6}
-  .total-row td{font-weight:700;background:#1a2744;color:#fff;border:none}
+  .total-row td{font-weight:700;background:#f3f4f6;color:#1a2744;border:none;border-top:2px solid #e5e7eb}
   .total-row td:first-child{border-radius:0 0 0 8px}
   .total-row td:last-child{border-radius:0 0 8px 0}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -739,20 +711,20 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
     .photo-card{page-break-inside:avoid}
     .photo-card img{height:140px!important;object-fit:cover!important}
     /* Ensure backgrounds print with solid colors (gradients can fail) */
-    .masthead{margin:0 0 20px;border-radius:8px;background:#1a2744!important;border:2px solid #1a2744;overflow:visible!important;padding:20px!important}
+    .masthead{margin:0 0 20px;border-radius:8px;background:#ffffff!important;border:none;border-bottom:3px solid #e8853a!important;overflow:visible!important;padding:20px!important}
     .masthead::before{display:none!important}
     .masthead-content{position:relative;display:flex!important;justify-content:space-between!important;align-items:flex-start!important;gap:20px!important}
     .masthead-content>div:first-child{flex:1!important;min-width:0!important}
     .date-box{flex-shrink:0!important;min-width:180px!important}
     .section{background:#fff!important;border:2px solid #e5e7eb!important;margin-bottom:12px!important}
-    th{background:#1a2744!important;color:#fff!important}
-    .total-row td{background:#1a2744!important;color:#fff!important}
+    th{background:#f3f4f6!important;color:#1a2744!important;border-bottom:2px solid #e5e7eb!important}
+    .total-row td{background:#f3f4f6!important;color:#1a2744!important;border-top:2px solid #e5e7eb!important}
     tr:nth-child(even){background:#f3f4f6!important}
     .info-box{background:#fff!important;border:2px solid #d1d5db!important}
     .info-box.alert{background:#fef2f2!important;border-color:#ef4444!important}
-    .date-box{background:#f3f4f6!important;border:2px solid #1a2744!important}
+    .date-box{background:#f9fafb!important;border:1px solid #e5e7eb!important}
     .date-box .date{color:#1a2744!important}
-    .date-box .meta{color:#4b5563!important}
+    .date-box .meta{color:#6b7280!important}
     .date-box div{color:#1a2744!important}
     .down{background:#fef2f2!important}
     .photo-card{border:2px solid #e5e7eb!important}
@@ -770,7 +742,7 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
       <div class="report-type">Daily Field Report</div>
     </div>
     <div class="date-box">
-      <div style="font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Report Date</div>
+      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Report Date</div>
       <div class="date">${fmtDateShort(report.date)}</div>
       <div class="meta" style="margin-top:8px">${report.day} · ${report.weather}${report.temperature ? ` · ${report.temperature}` : ""}</div>
       ${report.rainfall ? `<div class="meta">Rainfall: ${report.rainfall} in</div>` : ""}
@@ -843,7 +815,7 @@ window.onload = async () => {
     scale: 2,
     useCORS: true,
     allowTaint: true,
-    backgroundColor: '#f8fafc'
+    backgroundColor: '#ffffff'
   });
 
   // Replace page content with the canvas image
@@ -885,46 +857,46 @@ const exportWeeklyPDF = (weekly, project) => {
 
   // White logo for dark background
   const BIC_LOGO_WHITE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 50" style="height:36px">
-    <text x="0" y="34" font-family="Georgia, serif" font-size="32" font-weight="bold" fill="#fff">BIC</text>
+    <text x="0" y="34" font-family="Georgia, serif" font-size="32" font-weight="bold" fill="#1a2744">BIC</text>
     <text x="70" y="30" font-family="Georgia, serif" font-size="14" font-style="italic" fill="#e8853a">the Original.</text>
-    <text x="0" y="46" font-family="system-ui, sans-serif" font-size="7" fill="#8899b4">Blue Iron Corp. | Ca. License #65233</text>
+    <text x="0" y="46" font-family="system-ui, sans-serif" font-size="7" fill="#6b7280">Blue Iron Corp. | Ca. License #65233</text>
   </svg>`;
 
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Weekly Report ${weekly.weekEnding}</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:linear-gradient(180deg,#0a0f1a 0%,#0d1527 100%);min-height:100vh}
+  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:#ffffff;min-height:100vh;color:#1a2744}
   .page{max-width:1100px;width:100%;margin:0 auto;padding:32px}
 
   /* Header */
-  .header,.header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid rgba(255,255,255,0.1)}
+  .header,.header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:3px solid #e8853a}
   .header-left{flex:1}
-  .header-right{text-align:right;background:linear-gradient(135deg,rgba(232,133,58,0.2) 0%,rgba(232,133,58,0.05) 100%);padding:20px 24px;border-radius:12px;border:1px solid rgba(232,133,58,0.3)}
+  .header-right{text-align:right;background:#fff7ed;padding:20px 24px;border-radius:12px;border:1px solid #e8853a}
   .report-badge{display:inline-block;background:linear-gradient(135deg,#e8853a 0%,#f59e0b 100%);color:#fff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;padding:8px 16px;border-radius:6px;margin-top:16px}
-  .week-ending{font-size:11px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px}
-  .week-date{font-size:28px;font-weight:800;color:#fff;letter-spacing:-0.02em}
+  .week-ending{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px}
+  .week-date{font-size:28px;font-weight:800;color:#1a2744;letter-spacing:-0.02em}
 
   /* Project Title */
   .project-title{text-align:center;margin-bottom:28px}
-  .project-title h1{font-size:28px;font-weight:800;color:#fff;margin-bottom:8px;letter-spacing:-0.02em}
-  .project-title .subtitle{font-size:14px;color:#8899b4}
+  .project-title h1{font-size:28px;font-weight:800;color:#1a2744;margin-bottom:8px;letter-spacing:-0.02em}
+  .project-title .subtitle{font-size:14px;color:#6b7280}
 
   /* Panels */
-  .panel{background:linear-gradient(135deg,rgba(22,32,64,0.8) 0%,rgba(15,23,42,0.9) 100%);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:20px 24px;color:#fff;font-size:12px;backdrop-filter:blur(4px)}
-  .panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:10px}
+  .panel{background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:20px 24px;color:#1a2744;font-size:12px}
+  .panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e5e7eb;display:flex;align-items:center;gap:10px}
   .panel-title.orange{color:#e8853a}
   .panel-title.orange::before{content:'';width:4px;height:14px;background:#e8853a;border-radius:2px}
-  .panel-title.white{color:#fff}
-  .panel-title.white::before{content:'';width:4px;height:14px;background:#fff;border-radius:2px;opacity:0.5}
+  .panel-title.white{color:#1a2744}
+  .panel-title.white::before{content:'';width:4px;height:14px;background:#1a2744;border-radius:2px;opacity:0.3}
   .panel ul{list-style:none;padding:0}
-  .panel li{padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;align-items:flex-start;gap:10px}
+  .panel li{padding:8px 0;border-bottom:1px solid #f3f4f6;display:flex;align-items:flex-start;gap:10px}
   .panel li:last-child{border-bottom:none}
   .panel li::before{content:'→';color:#e8853a;font-weight:bold;flex-shrink:0}
-  .panel li span{color:#fff}
+  .panel li span{color:#374151}
   .panel li span.complete{color:#4ade80}
-  .panel .content{color:#c9d1e0;line-height:1.7}
-  .panel .content:empty::before{content:'—';color:#4b5563}
+  .panel .content{color:#374151;line-height:1.7}
+  .panel .content:empty::before{content:'—';color:#9ca3af}
 
   .green{color:#4ade80} .red{color:#ef4444} .orange{color:#e8853a}
 
@@ -936,8 +908,8 @@ const exportWeeklyPDF = (weekly, project) => {
   /* Milestone Table */
   .milestone-section{margin-top:20px}
   .milestone-table{width:100%;border-collapse:separate;border-spacing:0;font-size:11px;margin-top:12px;border-radius:8px;overflow:hidden}
-  .milestone-table th{background:linear-gradient(135deg,#1a2744 0%,#0f172a 100%);color:#fff;padding:12px 16px;text-align:left;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px}
-  .milestone-table td{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.05);color:#c9d1e0}
+  .milestone-table th{background:#f3f4f6;color:#1a2744;padding:12px 16px;text-align:left;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px;border-bottom:2px solid #e5e7eb}
+  .milestone-table td{padding:12px 16px;border-bottom:1px solid #f3f4f6;color:#374151}
   .milestone-table tr:last-child td{border-bottom:none}
   .milestone-table .complete{color:#4ade80;font-weight:600}
   .milestone-table .in-progress{color:#fbbf24;font-weight:600}
@@ -946,11 +918,11 @@ const exportWeeklyPDF = (weekly, project) => {
 
   /* Info Row */
   .info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}
-  .info-box{background:rgba(22,32,64,0.5);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:16px 20px}
-  .info-box-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#8899b4;margin-bottom:8px}
-  .info-box-content{font-size:12px;color:#fff;line-height:1.6}
-  .info-box-content:empty::before{content:'—';color:#4b5563}
-  .info-box.highlight{border-color:rgba(232,133,58,0.3);background:rgba(232,133,58,0.08)}
+  .info-box{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px}
+  .info-box-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#6b7280;margin-bottom:8px}
+  .info-box-content{font-size:12px;color:#1a2744;line-height:1.6}
+  .info-box-content:empty::before{content:'—';color:#9ca3af}
+  .info-box.highlight{border-color:#e8853a;background:#fff7ed}
   .info-box.highlight .info-box-title{color:#e8853a}
 
   /* Footer */
@@ -972,7 +944,7 @@ const exportWeeklyPDF = (weekly, project) => {
   /* Repeating header table structure */
   .report-wrapper{display:table;width:100%}
   .repeating-header{display:table-header-group}
-  .repeating-header .header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid rgba(255,255,255,0.1)}
+  .repeating-header .header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:3px solid #e8853a}
   .report-body{display:table-row-group}
 
   .page-break{page-break-before:always}
@@ -985,23 +957,23 @@ const exportWeeklyPDF = (weekly, project) => {
 
     /* Body — keep the dark gradient background */
     html,body{margin:0!important;padding:0!important}
-    body{background:#0a0f1a!important}
+    body{background:#ffffff!important}
 
     /* Page container */
     .page{padding:24px!important;max-width:1100px;margin:0 auto}
 
     /* Header — keep dark, preserve flex */
-    .header,.header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px!important;margin-bottom:24px!important;border-bottom:1px solid rgba(255,255,255,0.1)}
+    .header,.header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px!important;margin-bottom:24px!important;border-bottom:3px solid #e8853a!important}
     .header-left{flex:1!important}
-    .header-right{text-align:right;background:#1a2744!important;padding:16px 20px!important;border-radius:10px;border:1px solid rgba(232,133,58,0.3)}
+    .header-right{text-align:right;background:#fff7ed!important;padding:16px 20px!important;border-radius:10px;border:1px solid #e8853a!important}
     .week-ending{font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em}
-    .week-date{font-size:24px;font-weight:800;color:#fff}
+    .week-date{font-size:24px;font-weight:800;color:#1a2744!important}
     .report-badge{display:inline-block!important;background:#e8853a!important;color:#fff!important;padding:6px 14px!important;border-radius:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-top:12px}
 
     /* Project title */
     .project-title{text-align:center;margin:24px 0}
-    .project-title h1{font-size:26px;font-weight:800;color:#fff!important;margin-bottom:6px}
-    .project-title .subtitle{color:#8899b4!important;font-size:14px}
+    .project-title h1{font-size:26px;font-weight:800;color:#1a2744!important;margin-bottom:6px}
+    .project-title .subtitle{color:#6b7280!important;font-size:14px}
 
     /* Preserve grid and flex layouts exactly */
     .main-grid{display:grid!important;grid-template-columns:1.5fr 1fr!important;gap:20px!important;margin-bottom:20px}
@@ -1009,27 +981,27 @@ const exportWeeklyPDF = (weekly, project) => {
     .two-col{display:grid!important;grid-template-columns:1fr 1fr!important;gap:16px!important}
 
     /* Panels — dark background, same as screen */
-    .panel{background:#111827!important;border:1px solid rgba(255,255,255,0.1)!important;border-radius:12px;padding:20px 24px!important;color:#fff!important;font-size:12px;page-break-inside:avoid;margin-bottom:12px}
+    .panel{background:#ffffff!important;border:1px solid #e5e7eb!important;border-radius:12px;padding:20px 24px!important;color:#1a2744!important;font-size:12px;page-break-inside:avoid;margin-bottom:12px}
     .panel-title{color:#e8853a!important;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid rgba(255,255,255,0.1)!important;display:flex!important;align-items:center!important;gap:10px!important}
     .panel-title.orange{color:#e8853a!important}
-    .panel-title.white{color:#fff!important}
+    .panel-title.white{color:#1a2744!important}
     .panel-title::before{content:''!important;display:inline-block!important;width:4px!important;height:14px!important;background:#e8853a!important;border-radius:2px!important;flex-shrink:0}
     .panel ul{display:block!important;list-style:none;padding:0}
-    .panel li{display:flex!important;align-items:flex-start!important;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);color:#fff!important}
+    .panel li{display:flex!important;align-items:flex-start!important;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;color:#374151!important}
     .panel li:last-child{border-bottom:none}
     .panel li::before{content:'→'!important;color:#e8853a!important;font-weight:bold;flex-shrink:0}
-    .panel li span{color:#fff!important}
+    .panel li span{color:#374151!important}
     .panel li span.complete{color:#4ade80!important}
-    .panel .content{color:#c9d1e0!important;line-height:1.7}
+    .panel .content{color:#374151!important;line-height:1.7}
     .panel .content:empty::before{content:'—';color:#4b5563}
 
     /* Info row — preserve 3-column grid */
     .info-row{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:16px!important;margin-top:20px}
-    .info-box{background:rgba(17,24,39,0.8)!important;border:1px solid rgba(255,255,255,0.08)!important;border-radius:10px;padding:16px 20px!important;color:#fff!important}
-    .info-box-title{color:#8899b4!important;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px}
-    .info-box-content{color:#fff!important;font-size:12px;line-height:1.6}
-    .info-box-content:empty::before{content:'—';color:#4b5563}
-    .info-box.highlight{border-color:rgba(232,133,58,0.3)!important;background:rgba(232,133,58,0.08)!important}
+    .info-box{background:#f9fafb!important;border:1px solid #e5e7eb!important;border-radius:10px;padding:16px 20px!important;color:#1a2744!important}
+    .info-box-title{color:#6b7280!important;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px}
+    .info-box-content{color:#1a2744!important;font-size:12px;line-height:1.6}
+    .info-box-content:empty::before{content:'—';color:#9ca3af}
+    .info-box.highlight{border-color:#e8853a!important;background:#fff7ed!important}
     .info-box.highlight .info-box-title{color:#e8853a!important}
 
     /* Milestone table — dark header */
@@ -1037,8 +1009,8 @@ const exportWeeklyPDF = (weekly, project) => {
     tr{display:table-row!important}
     th,td{display:table-cell!important}
     .milestone-table{width:100%;font-size:11px;margin-top:12px;border-radius:8px;overflow:hidden}
-    .milestone-table th{background:#1a2744!important;color:#fff!important;padding:12px 16px;text-align:left;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px}
-    .milestone-table td{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.05);color:#c9d1e0!important}
+    .milestone-table th{background:#f3f4f6!important;color:#1a2744!important;padding:12px 16px;text-align:left;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px;border-bottom:2px solid #e5e7eb!important}
+    .milestone-table td{padding:12px 16px;border-bottom:1px solid #f3f4f6!important;color:#374151!important}
     .milestone-table tr:last-child td{border-bottom:none}
     .milestone-table .complete{color:#4ade80!important;font-weight:600}
     .milestone-table .in-progress{color:#fbbf24!important;font-weight:600}
@@ -1063,12 +1035,12 @@ const exportWeeklyPDF = (weekly, project) => {
     .photo-card-date{font-size:9px!important;color:#6b7280!important}
 
     /* Footer */
-    .footer{text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.1);color:#6b7280!important;font-size:11px}
+    .footer{text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;color:#6b7280!important;font-size:11px}
 
     /* Repeating header on every printed page */
     .report-wrapper{display:table!important;width:100%!important}
     .repeating-header{display:table-header-group!important}
-    .repeating-header .header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px 0!important;margin-bottom:20px!important;border-bottom:1px solid rgba(255,255,255,0.1)!important}
+    .repeating-header .header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px 0!important;margin-bottom:20px!important;border-bottom:3px solid #e8853a!important}
     .report-body{display:table-row-group!important}
 
     /* Page break helper */
@@ -1127,15 +1099,13 @@ const exportWeeklyPDF = (weekly, project) => {
     <div class="panel milestone-section">
       <div class="panel-title white">Milestone Tracking</div>
       <table class="milestone-table">
-        <tr><th scope="col">Description</th><th scope="col">Milestone</th><th scope="col">Target</th><th scope="col">Status</th></tr>
-        ${project.milestones.map(m => {
-          const status = m.status || (m.actualDate ? "complete" : "not_started");
-          const statusLabel = status === "complete" ? "Complete" : status === "in_progress" ? "In Progress" : "Not Started";
-          const statusClass = status === "complete" ? "complete" : status === "in_progress" ? "in-progress" : "pending";
-          return `<tr><td class="${statusClass}">${m.description}</td><td>${fmtD(m.milestoneDate)}</td><td>${fmtD(m.targetDate)}</td><td class="${statusClass}">${statusLabel}</td></tr>`;
+        <tr><th scope="col">Description</th><th scope="col">Target</th><th scope="col">Status</th></tr>
+        ${getNormalizedTasks(project).filter(t => t.isMilestone).map(t => {
+          const statusLabel = t.status === "complete" ? "Complete" : t.status === "in_progress" ? "In Progress" : "Not Started";
+          const statusClass = t.status === "complete" ? "complete" : t.status === "in_progress" ? "in-progress" : "pending";
+          return `<tr><td class="${statusClass}">${t.description}</td><td>${fmtD(t.targetDate)}</td><td class="${statusClass}">${statusLabel}</td></tr>`;
         }).join("") || '<tr><td colspan="4" style="text-align:center;color:#6b7280">No milestones defined</td></tr>'}
       </table>
-      <div class="milestone-legend">Milestone = Owner Contract Schedule | Target = Sub OPS Schedule | Actual = Work Completed</div>
     </div>
     <div class="side-stack">
       <div class="panel">
@@ -1197,6 +1167,83 @@ ${(weekly.selectedPhotos || []).filter(p => p.selected !== false).length > 0 ? `
   </div>
 </div>` : ""}
 
+${(() => {
+  const ganttTasks = getNormalizedTasks(project);
+  if (ganttTasks.length === 0) return "";
+  const refDate = weekly.weekEnding || toISODate(new Date());
+  const wsDate = getWeekStart(refDate);
+  const lookbackDt = parseLocalDate(wsDate);
+  lookbackDt.setDate(lookbackDt.getDate() - 7);
+  const lookbackStr = toISODate(lookbackDt);
+  const gDays = [];
+  const gDt = parseLocalDate(lookbackStr);
+  for (let i = 0; i < 28; i++) {
+    const gd = toISODate(gDt);
+    if (isWorkDay(gd)) {
+      gDays.push({ date: gd, label: gDt.getDate().toString(), isToday: gd === refDate, isMon: gDt.getDay() === 1 });
+    }
+    gDt.setDate(gDt.getDate() + 1);
+  }
+  const firstDay = gDays.length > 0 ? gDays[0].date : lookbackStr;
+  const gWeeks = [];
+  let cw = null;
+  gDays.forEach((d, idx) => {
+    const ws = getWeekStart(d.date);
+    if (!cw || cw.start !== ws) { cw = { start: ws, days: 0 }; gWeeks.push(cw); }
+    cw.days++;
+  });
+  gWeeks.forEach((w, i) => { w.label = i === 0 ? "Last Week" : i === 1 ? "This Week" : "Week " + i; });
+  const isOldComplete = (task) => {
+    if (task.status !== "complete") return false;
+    const cd = task.actualCompletionDate || task.targetDate;
+    if (!cd) return true;
+    return cd < firstDay;
+  };
+  const getBar = (task) => {
+    const sd = task.targetDate || refDate;
+    const dur = task.expectedDuration || 1;
+    const ed = addWorkDays(sd, dur);
+    const si = gDays.findIndex(d => d.date >= sd);
+    const ei = gDays.findIndex(d => d.date >= ed);
+    return { si: si >= 0 ? si : 0, span: Math.max(1, (ei >= 0 ? ei : gDays.length) - (si >= 0 ? si : 0)) };
+  };
+  return `
+<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">
+    <div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>
+    <h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">3-Week Schedule Look-Ahead</h2>
+  </div>
+  <table style="width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed">
+    <colgroup><col style="width:160px"/>${gDays.map(() => '<col style="width:auto"/>').join("")}</colgroup>
+    <tr>${['<th style="padding:6px 8px;background:#1a2744;color:#fff;font-size:9px;text-align:left;font-weight:700">Task</th>'].concat(gWeeks.map(w => `<th colspan="${w.days}" style="padding:4px;background:#1a2744;color:#fff;font-size:9px;text-align:center;border-left:1px solid #2d3a54">${w.label}</th>`)).join("")}</tr>
+    <tr>${['<th style="padding:3px 8px;background:#f3f4f6;font-size:8px;color:#6b7280;text-align:left;border-bottom:2px solid #e5e7eb"></th>'].concat(gDays.map(d => `<th style="padding:2px;background:${d.isToday ? '#fff7ed' : '#f3f4f6'};font-size:8px;color:${d.isToday ? '#e8853a' : '#9ca3af'};text-align:center;border-left:${d.isMon ? '2px solid #d1d5db' : '1px solid #e5e7eb'};border-bottom:2px solid ${d.isToday ? '#e8853a' : '#e5e7eb'};font-weight:${d.isToday ? '700' : '400'}">${d.label}</th>`)).join("")}</tr>
+    ${ganttTasks.map(task => {
+      const oldDone = isOldComplete(task);
+      const bar = oldDone ? null : getBar(task);
+      const color = task.isDelay ? '#ef4444' : task.status === 'in_progress' ? '#eab308' : task.status === 'complete' ? '#22c55e' : '#1a2744';
+      const nameColor = oldDone ? '#22c55e' : task.isDelay ? '#ef4444' : '#1a2744';
+      const nameExtra = oldDone ? 'border:2px solid #22c55e;border-radius:4px;' : '';
+      const cells = oldDone
+        ? gDays.map(function(d) { return '<td style="padding:3px 1px;background:' + (d.isToday ? 'rgba(232,133,58,0.04)' : 'transparent') + ';border-left:' + (d.isMon ? '2px solid #e5e7eb' : '1px solid #f3f4f6') + '"></td>'; }).join("")
+        : gDays.map(function(d, di) {
+          var isBar = di >= bar.si && di < bar.si + bar.span;
+          var isS = di === bar.si;
+          var isE = di === bar.si + bar.span - 1;
+          var inner = isBar ? '<div style="height:12px;background:' + color + ';opacity:0.85;border-radius:' + (isS ? '3px' : '0') + ' ' + (isE ? '3px' : '0') + ' ' + (isE ? '3px' : '0') + ' ' + (isS ? '3px' : '0') + ';margin:0 ' + (isE ? '1px' : '0') + ' 0 ' + (isS ? '1px' : '0') + '"></div>' : '';
+          return '<td style="padding:3px 1px;background:' + (d.isToday ? 'rgba(232,133,58,0.04)' : 'transparent') + ';border-left:' + (d.isMon ? '2px solid #e5e7eb' : '1px solid #f3f4f6') + '">' + inner + '</td>';
+        }).join("");
+      return '<tr style="border-bottom:1px solid #f3f4f6"><td style="padding:5px 8px;font-size:10px;font-weight:500;color:' + nameColor + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid #e5e7eb;' + nameExtra + '">' + task.description + (task.isMilestone ? ' ◆' : '') + '</td>' + cells + '</tr>';
+    }).join("")}
+  </table>
+  <div style="margin-top:8px;font-size:9px;color:#6b7280;display:flex;gap:16px">
+    <span><span style="display:inline-block;width:10px;height:6px;background:#1a2744;border-radius:2px;margin-right:4px"></span>Scheduled</span>
+    <span><span style="display:inline-block;width:10px;height:6px;background:#eab308;border-radius:2px;margin-right:4px"></span>In Progress</span>
+    <span><span style="display:inline-block;width:10px;height:6px;background:#ef4444;border-radius:2px;margin-right:4px"></span>Delay</span>
+    <span><span style="display:inline-block;width:10px;height:6px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Complete</span>
+  </div>
+</div>`;
+})()}
+
 <script>window.onload=()=>window.print()</script></body></html>`;
 
   const blob = new Blob([html], { type: "text/html" });
@@ -1215,9 +1262,10 @@ const aggregateWeeklyData = (weekReports, project) => {
   const completed = [];
   const ongoing = [];
   const delays = [];
+  const tasks = getNormalizedTasks(project);
   const allMilestoneHits = weekReports.filter(r => r.milestoneHit).map(r => {
-    const m = project.milestones.find(ms => ms.id === r.milestoneHit.id);
-    return m ? m.description : null;
+    const t = tasks.find(tk => tk.id === r.milestoneHit.id);
+    return t ? t.description : null;
   }).filter(Boolean);
 
   allMilestoneHits.forEach(desc => completed.push(desc));
@@ -1251,25 +1299,13 @@ const aggregateWeeklyData = (weekReports, project) => {
 
 const getActiveProject = (state) => state.projects.find(p => p.id === state.activeProjectId) || null;
 
-// Normalize milestone to new structure (backwards compatibility)
-const normalizeMilestone = (m) => ({
-  ...m,
-  startDate: m.startDate || m.inProgressDate || "",
-  targetDate: m.targetDate || "",
-  completionDate: m.completionDate || m.actualDate || "",
-  tasks: m.tasks || [],
-});
-
-// Get milestones with normalized structure
-const getNormalizedMilestones = (project) => (project?.milestones || []).map(normalizeMilestone);
-
 const newProjectTemplate = () => ({
   id: `proj-${Date.now()}`,
   jobNumber: "",
   jobName: "",
   client: "",
   preparedBy: "",
-  milestones: [],
+  tasks: [],
   equipmentOwned: [],
   equipmentRented: [],
   safetyMeetings: [], // { topicId, date, attendeeCount }
@@ -1328,24 +1364,14 @@ function reducer(state, action) {
       };
     }
     case "SET_PROJECT": return updateActiveProject(action.data);
-    case "ADD_MILESTONE": return updateActiveProject({ milestones: [...(project.milestones || []), { id: `m${Date.now()}`, description: "", startDate: "", targetDate: "", completionDate: "", status: "not_started", tasks: [] }] });
-    case "UPDATE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).map(m => m.id === action.id ? { ...m, ...action.data } : m) });
-    case "REMOVE_MILESTONE": return updateActiveProject({ milestones: (project.milestones || []).filter(m => m.id !== action.id) });
-    case "ADD_TASK": return updateActiveProject({
-      milestones: (project.milestones || []).map(m => m.id === action.milestoneId
-        ? { ...m, tasks: [...(m.tasks || []), { id: `t${Date.now()}`, description: "", estimatedHours: 0, startDate: "", targetDate: "", completionDate: "", status: "not_started" }] }
-        : m)
-    });
-    case "UPDATE_TASK": return updateActiveProject({
-      milestones: (project.milestones || []).map(m => m.id === action.milestoneId
-        ? { ...m, tasks: (m.tasks || []).map(t => t.id === action.taskId ? { ...t, ...action.data } : t) }
-        : m)
-    });
-    case "REMOVE_TASK": return updateActiveProject({
-      milestones: (project.milestones || []).map(m => m.id === action.milestoneId
-        ? { ...m, tasks: (m.tasks || []).filter(t => t.id !== action.taskId) }
-        : m)
-    });
+    case "ADD_TASK": {
+      const tasks = getNormalizedTasks(project);
+      const newTask = normalizeTask({ id: `task-${Date.now()}`, description: "", targetDate: "", status: "not_started", isMilestone: action.isMilestone || false, isDelay: action.isDelay || false, sortOrder: tasks.length });
+      return updateActiveProject({ tasks: [...tasks, newTask] });
+    }
+    case "UPDATE_TASK": return updateActiveProject({ tasks: getNormalizedTasks(project).map(t => t.id === action.id ? { ...t, ...action.data } : t) });
+    case "REMOVE_TASK": return updateActiveProject({ tasks: getNormalizedTasks(project).filter(t => t.id !== action.id) });
+    case "REORDER_TASKS": return updateActiveProject({ tasks: action.tasks });
     case "ADD_SAFETY_MEETING": {
       const existing = project.safetyMeetings || [];
       // Don't add duplicate meetings for same topic
@@ -1381,15 +1407,14 @@ function reducer(state, action) {
     case "UPDATE_EDITING_DAILY": return { ...state, editingDaily: { ...state.editingDaily, ...action.data } };
     case "UPDATE_TASK_HOURS": {
       const existingHours = state.editingDaily.taskHours || [];
-      const idx = existingHours.findIndex(h => h.milestoneId === action.milestoneId && h.taskId === action.taskId);
+      const idx = existingHours.findIndex(h => h.taskId === action.taskId);
       let newTaskHours;
       if (action.hours === 0 && idx >= 0) {
-        // Remove entry if hours is 0
         newTaskHours = existingHours.filter((_, i) => i !== idx);
       } else if (idx >= 0) {
         newTaskHours = existingHours.map((h, i) => i === idx ? { ...h, hours: action.hours } : h);
       } else if (action.hours > 0) {
-        newTaskHours = [...existingHours, { milestoneId: action.milestoneId, taskId: action.taskId, hours: action.hours }];
+        newTaskHours = [...existingHours, { taskId: action.taskId, hours: action.hours }];
       } else {
         newTaskHours = existingHours;
       }
@@ -1405,8 +1430,9 @@ function reducer(state, action) {
       if (saving.milestoneHit && saving.milestoneHit.id) {
         updatedProjects = state.projects.map(p => {
           if (p.id !== saving.projectId) return p;
-          return { ...p, milestones: p.milestones.map(m =>
-            m.id === saving.milestoneHit.id ? { ...m, actualDate: saving.milestoneHit.date || saving.date } : m
+          const tasks = getNormalizedTasks(p);
+          return { ...p, tasks: tasks.map(t =>
+            t.id === saving.milestoneHit.id ? { ...t, actualCompletionDate: saving.milestoneHit.date || saving.date, status: "complete" } : t
           )};
         });
       }
@@ -1440,6 +1466,7 @@ function Sidebar({ currentView, dispatch, projects, activeProjectId }) {
     { id: "projectSetup", icon: FolderCog, label: "Project Setup" },
     { id: "dailyEntry", icon: ClipboardEdit, label: "Daily Entry" },
     { id: "weeklyGen", icon: CalendarRange, label: "Weekly Report" },
+    { id: "schedule", icon: Calendar, label: "Schedule" },
     { id: "photos", icon: Image, label: "Photo Gallery" },
     { id: "safety", icon: Shield, label: "Safety Meetings" },
   ];
@@ -1576,6 +1603,7 @@ function MobileNav({ currentView, dispatch, projects, activeProjectId }) {
     { id: "projectSetup", icon: FolderCog, label: "Project Setup" },
     { id: "dailyEntry", icon: ClipboardEdit, label: "Daily Entry" },
     { id: "weeklyGen", icon: CalendarRange, label: "Weekly Report" },
+    { id: "schedule", icon: Calendar, label: "Schedule" },
     { id: "photos", icon: Image, label: "Photo Gallery" },
     { id: "safety", icon: Shield, label: "Safety Meetings" },
   ];
@@ -1861,7 +1889,7 @@ function ProjectAI({ state, project }) {
             jobNumber: project.jobNumber,
             client: project.client,
             location: project.location,
-            milestones: project.milestones
+            tasks: getNormalizedTasks(project)
           },
           dailyReports: trimmedReports
         })
@@ -1934,14 +1962,10 @@ function ProjectAI({ state, project }) {
 }
 
 // ─── Hours Summary Component ─────────────────────────────────
-function HoursSummary({ milestones, dailyReports, projectId }) {
+function HoursSummary({ tasks, dailyReports, projectId }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // Get normalized milestones with tasks
-  const normalizedMilestones = milestones.map(normalizeMilestone);
-  const milestonesWithTasks = normalizedMilestones.filter(m => (m.tasks || []).length > 0);
-
-  if (milestonesWithTasks.length === 0) return null;
+  if (!tasks || tasks.length === 0) return null;
 
   // Aggregate task hours from all daily reports for this project
   const projectDailies = dailyReports.filter(r => r.projectId === projectId);
@@ -1952,23 +1976,21 @@ function HoursSummary({ milestones, dailyReports, projectId }) {
   let totalActual = 0;
   const taskDetails = [];
 
-  milestonesWithTasks.forEach(m => {
-    (m.tasks || []).forEach(t => {
-      const estimated = parseFloat(t.estimatedHours) || 0;
-      const actual = allTaskHours
-        .filter(h => h.milestoneId === m.id && h.taskId === t.id)
-        .reduce((sum, h) => sum + (h.hours || 0), 0);
-      totalEstimated += estimated;
-      totalActual += actual;
-      taskDetails.push({
-        milestoneId: m.id,
-        milestoneDesc: m.description,
-        taskId: t.id,
-        taskDesc: t.description,
-        estimated,
-        actual,
-        status: t.status || "not_started",
-      });
+  tasks.forEach(t => {
+    const estimated = t.expectedDuration || 0;
+    const actual = allTaskHours
+      .filter(h => h.taskId === t.id)
+      .reduce((sum, h) => sum + (h.hours || 0), 0);
+    totalEstimated += estimated;
+    totalActual += actual;
+    taskDetails.push({
+      taskId: t.id,
+      taskDesc: t.description,
+      estimated,
+      actual,
+      status: t.status || "not_started",
+      isMilestone: t.isMilestone,
+      isDelay: t.isDelay,
     });
   });
 
@@ -2032,10 +2054,11 @@ function HoursSummary({ milestones, dailyReports, projectId }) {
                 };
                 const sc = statusColors[td.status] || statusColors.not_started;
                 return (
-                  <tr key={`${td.milestoneId}-${td.taskId}`} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: idx % 2 === 0 ? T.white : T.neutral[50] }}>
+                  <tr key={td.taskId} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: idx % 2 === 0 ? T.white : T.neutral[50] }}>
                     <td style={{ padding: "10px 12px" }}>
-                      <span style={{ color: T.navy[700] }}>{td.taskDesc || "(Unnamed task)"}</span>
-                      <span style={{ color: T.neutral[400], fontSize: "11px", marginLeft: "8px" }}>— {td.milestoneDesc}</span>
+                      <span style={{ color: td.isDelay ? T.red[500] : T.navy[700] }}>{td.taskDesc || "(Unnamed task)"}</span>
+                      {td.isMilestone && <span style={{ color: T.orange[500], fontSize: "11px", marginLeft: "8px" }}>(Milestone)</span>}
+                      {td.isDelay && <span style={{ color: T.red[500], fontSize: "11px", marginLeft: "8px" }}>(Delay)</span>}
                     </td>
                     <td style={{ textAlign: "center", padding: "10px 12px", color: T.neutral[600] }}>{td.estimated}h</td>
                     <td style={{ textAlign: "center", padding: "10px 12px", color: T.neutral[600] }}>{td.actual}h</td>
@@ -2057,19 +2080,15 @@ function HoursSummary({ milestones, dailyReports, projectId }) {
 }
 
 // ─── Schedule Overview Component ─────────────────────────────────
-function ScheduleOverview({ milestones, dailyReports, projectId }) {
+function ScheduleOverview({ tasks, dailyReports, projectId }) {
   const [isExpanded, setIsExpanded] = useState(true);
 
-  const normalizedMilestones = milestones.map(normalizeMilestone);
-  const projectDailies = dailyReports.filter(r => r.projectId === projectId);
-  const allTaskHours = projectDailies.flatMap(r => r.taskHours || []);
+  // Generate look-ahead data using flat tasks
+  const lookAhead = generateLookAhead(tasks || [], 3);
 
-  // Generate look-ahead data
-  const lookAhead = generateLookAhead(normalizedMilestones, allTaskHours, 3);
+  if (!lookAhead.weeks || lookAhead.weeks.length === 0) return null;
 
-  if (lookAhead.schedules?.length === 0 && lookAhead.weeks?.length === 0) return null;
-
-  const { schedules = [], weeks = [] } = lookAhead;
+  const { weeks = [] } = lookAhead;
 
   return (
     <Card style={{ marginBottom: "24px" }}>
@@ -2086,47 +2105,6 @@ function ScheduleOverview({ milestones, dailyReports, projectId }) {
 
       {isExpanded && (
         <>
-          {/* Milestone Projections */}
-          {schedules.length > 0 && (
-            <div style={{ marginBottom: "20px" }}>
-              <div style={{ fontSize: "12px", fontWeight: 600, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
-                Milestone Projections
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {schedules.filter(s => s !== null).map(s => {
-                  const isLate = s.targetDate && s.projectedCompletion > s.targetDate;
-                  const daysOverUnder = s.targetDate ? Math.round((new Date(s.projectedCompletion) - new Date(s.targetDate)) / (1000 * 60 * 60 * 24)) : 0;
-                  return (
-                    <div key={s.milestoneId} style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "12px 14px", borderRadius: T.radius.md,
-                      background: isLate ? "rgba(239, 68, 68, 0.08)" : T.neutral[50],
-                      border: `1px solid ${isLate ? "rgba(239, 68, 68, 0.2)" : T.neutral[200]}`,
-                    }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: "14px", fontWeight: 600, color: T.navy[700], marginBottom: "4px" }}>{s.description}</div>
-                        <div style={{ fontSize: "12px", color: T.neutral[500] }}>
-                          {s.remainingHours}h remaining &middot; ~{s.daysRemaining} work days
-                        </div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: "12px", color: T.neutral[400], marginBottom: "2px" }}>Projected</div>
-                        <div style={{ fontSize: "14px", fontWeight: 600, color: isLate ? T.red[500] : T.green[500] }}>
-                          {fmtDateShort(s.projectedCompletion)}
-                        </div>
-                        {s.targetDate && (
-                          <div style={{ fontSize: "11px", color: isLate ? T.red[500] : T.neutral[400], marginTop: "2px" }}>
-                            {isLate ? `${daysOverUnder}d late vs target` : `Target: ${fmtDateShort(s.targetDate)}`}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           {/* 3-Week Look-Ahead */}
           {weeks.length > 0 && (
             <div>
@@ -2151,9 +2129,8 @@ function ScheduleOverview({ milestones, dailyReports, projectId }) {
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                         {week.tasks.slice(0, 5).map((t, idx) => (
-                          <div key={`${t.taskId}-${idx}`} style={{ fontSize: "12px", color: T.navy[600] }}>
+                          <div key={`${t.taskId}-${idx}`} style={{ fontSize: "12px", color: t.isMilestone ? T.orange[600] : T.navy[600] }}>
                             <span style={{ fontWeight: 500 }}>{t.taskDesc}</span>
-                            <span style={{ color: T.neutral[400], marginLeft: "4px" }}>({t.hoursPlanned}h)</span>
                           </div>
                         ))}
                         {week.tasks.length > 5 && (
@@ -2202,9 +2179,8 @@ function Dashboard({ state, dispatch }) {
     const agg = aggregateWeeklyData(weekReports, project);
 
     // Generate look-ahead from schedule data
-    const normalizedMilestones = (project.milestones || []).map(normalizeMilestone);
-    const allTaskHours = projectDailies.flatMap(r => r.taskHours || []);
-    const lookAheadData = generateLookAhead(normalizedMilestones, allTaskHours, 2);
+    const projectTasks = getNormalizedTasks(project);
+    const lookAheadData = generateLookAhead(projectTasks, 2);
 
     // Convert look-ahead to editable text lines
     let lookAheadLines = [];
@@ -2213,7 +2189,7 @@ function Dashboard({ state, dispatch }) {
         if (week.tasks.length > 0) {
           lookAheadLines.push(`${week.label} (${fmtDateShort(week.weekStart)} - ${fmtDateShort(week.weekEnd)}):`);
           week.tasks.forEach(t => {
-            lookAheadLines.push(`  - ${t.taskDesc} (${t.hoursPlanned}h planned)`);
+            lookAheadLines.push(`  - ${t.taskDesc}`);
           });
         }
       });
@@ -2346,9 +2322,9 @@ function Dashboard({ state, dispatch }) {
         </button>
       </div>
 
-      <HoursSummary milestones={project.milestones || []} dailyReports={dailyReports} projectId={project.id} />
+      <HoursSummary tasks={getNormalizedTasks(project)} dailyReports={dailyReports} projectId={project.id} />
 
-      <ScheduleOverview milestones={project.milestones || []} dailyReports={dailyReports} projectId={project.id} />
+      <ScheduleOverview tasks={getNormalizedTasks(project)} dailyReports={dailyReports} projectId={project.id} />
 
       <SectionTitle icon={FileText}>Recent Daily Reports</SectionTitle>
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -2429,25 +2405,23 @@ function Dashboard({ state, dispatch }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
             <thead>
               <tr style={{ background: T.navy[800] }}>
-                {["Description","Milestone","Target","Status"].map(h => (
+                {["Description","Target","Status"].map(h => (
                   <th key={h} scope="col" style={{ padding: "10px 16px", textAlign: "left", color: T.white, fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {project.milestones.map((m, i) => {
-                const status = m.status || (m.actualDate ? "complete" : "not_started");
+              {getNormalizedTasks(project).filter(t => t.isMilestone).map((t, i) => {
                 const statusColors = {
                   not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Not Started" },
                   in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
                   complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
                 };
-                const sc = statusColors[status] || statusColors.not_started;
+                const sc = statusColors[t.status] || statusColors.not_started;
                 return (
-                  <tr key={m.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
-                    <td style={{ padding: "10px 16px", fontWeight: 500, color: status === "complete" ? T.green[500] : status === "in_progress" ? "#92400e" : T.navy[800] }}>{m.description}</td>
-                    <td style={{ padding: "10px 16px", color: T.neutral[500] }}>{fmtDateShort(m.milestoneDate)}</td>
-                    <td style={{ padding: "10px 16px", color: T.neutral[500] }}>{fmtDateShort(m.targetDate)}</td>
+                  <tr key={t.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
+                    <td style={{ padding: "10px 16px", fontWeight: 500, color: t.status === "complete" ? T.green[500] : t.status === "in_progress" ? "#92400e" : T.navy[800] }}>{t.description}</td>
+                    <td style={{ padding: "10px 16px", color: T.neutral[500] }}>{fmtDateShort(t.targetDate)}</td>
                     <td style={{ padding: "10px 16px" }}>
                       <span style={{ padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600, background: sc.bg, color: sc.text }}>{sc.label}</span>
                     </td>
@@ -2462,28 +2436,221 @@ function Dashboard({ state, dispatch }) {
   );
 }
 
-// ─── Milestone Editor Component ─────────────────────────────────
-function MilestoneEditor({ milestones, dispatch, dailyReports = [], projectId }) {
-  const [expandedIds, setExpandedIds] = useState([]);
-  const toggleExpand = (id) => setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+// ─── Three Week Look-Ahead (Gantt) Component ──────────────────
+function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = false }) {
+  const refDate = referenceDate || toISODate(new Date());
 
+  // Build 4-week span: 1 week lookback + 3 weeks forward
+  const weekStartDate = getWeekStart(refDate);
+  const lookbackStart = (() => {
+    const dt = parseLocalDate(weekStartDate);
+    dt.setDate(dt.getDate() - 7); // 1 week back
+    return toISODate(dt);
+  })();
+
+  // Generate all weekdays in the 4-week span (20 work days)
+  const days = [];
+  const dt = parseLocalDate(lookbackStart);
+  for (let i = 0; i < 28; i++) {
+    const d = toISODate(dt);
+    if (isWorkDay(d)) {
+      const dayOfWeek = dt.getDay();
+      days.push({ date: d, label: dt.getDate().toString(), dayName: ["","Mon","Tue","Wed","Thu","Fri"][dayOfWeek] || "", isToday: d === refDate });
+    }
+    dt.setDate(dt.getDate() + 1);
+  }
+
+  // Group days by week for headers
+  const weeks = [];
+  let currentWeek = null;
+  days.forEach((day, idx) => {
+    const ws = getWeekStart(day.date);
+    if (!currentWeek || currentWeek.start !== ws) {
+      currentWeek = { start: ws, startIdx: idx, days: 0, label: "" };
+      weeks.push(currentWeek);
+    }
+    currentWeek.days++;
+  });
+  weeks.forEach((w, i) => {
+    if (i === 0) w.label = "Last Week";
+    else if (i === 1) w.label = "This Week";
+    else w.label = `Week ${i}`;
+  });
+
+  // Show all tasks
+  const visibleTasks = (tasks || []);
+
+  // Determine if a completed task finished more than a week before the chart window
+  const firstDay = days.length > 0 ? days[0].date : lookbackStart;
+  const isOldComplete = (task) => {
+    if (task.status !== "complete") return false;
+    const cd = task.actualCompletionDate || task.targetDate;
+    if (!cd) return true;
+    return cd < firstDay;
+  };
+
+  // Calculate bar positions for each task
+  const getBarInfo = (task) => {
+    const startDate = task.targetDate || refDate;
+    const duration = task.expectedDuration || 1;
+    const endDate = addWorkDays(startDate, duration);
+
+    const startIdx = days.findIndex(d => d.date >= startDate);
+    const endIdx = days.findIndex(d => d.date >= endDate);
+
+    return {
+      startIdx: startIdx >= 0 ? startIdx : 0,
+      span: Math.max(1, (endIdx >= 0 ? endIdx : days.length) - (startIdx >= 0 ? startIdx : 0)),
+    };
+  };
+
+  if (days.length === 0 || visibleTasks.length === 0) {
+    return (
+      <div style={{ padding: "20px", textAlign: "center", color: T.neutral[400], fontSize: "13px" }}>
+        No tasks to display. Add tasks with target dates in Project Setup.
+      </div>
+    );
+  }
+
+  const cellWidth = 36;
+  const tableWidth = days.length * cellWidth + 180;
+
+  return (
+    <div style={{ overflowX: "auto", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md }}>
+      <table style={{ width: `${tableWidth}px`, minWidth: "100%", borderCollapse: "collapse", fontSize: "11px", tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: "180px" }} />
+          {days.map((_, i) => <col key={i} style={{ width: `${cellWidth}px` }} />)}
+        </colgroup>
+        <thead>
+          {/* Week row */}
+          <tr>
+            <th style={{ padding: "6px 10px", background: T.navy[800], color: T.white, fontWeight: 700, fontSize: "10px", textAlign: "left", borderBottom: `1px solid ${T.neutral[300]}` }}>Task</th>
+            {weeks.map((w, i) => (
+              <th key={i} colSpan={w.days} style={{ padding: "4px", background: T.navy[800], color: T.white, fontWeight: 600, fontSize: "9px", textAlign: "center", borderLeft: `1px solid ${T.navy[600]}`, borderBottom: `1px solid ${T.neutral[300]}` }}>
+                {w.label}
+              </th>
+            ))}
+          </tr>
+          {/* Day row */}
+          <tr>
+            <th style={{ padding: "4px 10px", background: T.neutral[100], fontWeight: 500, fontSize: "9px", color: T.neutral[500], textAlign: "left", borderBottom: `2px solid ${T.neutral[300]}` }}></th>
+            {days.map((d, i) => (
+              <th key={i} style={{
+                padding: "2px", background: d.isToday ? T.orange[100] : T.neutral[100], fontWeight: d.isToday ? 700 : 400,
+                fontSize: "9px", color: d.isToday ? T.orange[600] : T.neutral[500], textAlign: "center",
+                borderLeft: d.dayName === "Mon" ? `2px solid ${T.neutral[300]}` : `1px solid ${T.neutral[200]}`,
+                borderBottom: `2px solid ${d.isToday ? T.orange[500] : T.neutral[300]}`,
+              }}>
+                {d.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {visibleTasks.map(task => {
+            const oldDone = isOldComplete(task);
+            const bar = oldDone ? null : getBarInfo(task);
+            const barColor = task.isDelay ? "#ef4444" : task.status === "in_progress" ? "#eab308" : task.status === "complete" ? "#22c55e" : T.navy[600];
+
+            return (
+              <tr key={task.id} style={{ borderBottom: `1px solid ${T.neutral[100]}` }}>
+                <td style={{
+                  padding: "6px 10px", fontWeight: 500, fontSize: "11px",
+                  color: oldDone ? "#22c55e" : task.isDelay ? T.red[600] : T.navy[700],
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  borderRight: `1px solid ${T.neutral[200]}`,
+                  background: T.white,
+                  ...(oldDone ? { outline: "2px solid #22c55e", outlineOffset: "-2px", borderRadius: "4px" } : {}),
+                }}>
+                  {task.description || "(Unnamed)"}
+                  {task.isMilestone && <span style={{ color: T.orange[500], marginLeft: "4px", fontSize: "9px" }}>◆</span>}
+                </td>
+                {days.map((d, dayIdx) => {
+                  const isBar = !oldDone && bar && dayIdx >= bar.startIdx && dayIdx < bar.startIdx + bar.span;
+                  const isStart = bar && dayIdx === bar.startIdx;
+                  const isEnd = bar && dayIdx === bar.startIdx + bar.span - 1;
+
+                  return (
+                    <td key={dayIdx} style={{
+                      padding: "4px 1px",
+                      background: d.isToday ? "rgba(232,133,58,0.06)" : "transparent",
+                      borderLeft: d.dayName === "Mon" ? `2px solid ${T.neutral[200]}` : `1px solid ${T.neutral[100]}`,
+                      position: "relative",
+                    }}>
+                      {isBar && (
+                        <div style={{
+                          height: "14px", background: barColor, opacity: 0.85,
+                          borderRadius: `${isStart ? "3px" : "0"} ${isEnd ? "3px" : "0"} ${isEnd ? "3px" : "0"} ${isStart ? "3px" : "0"}`,
+                          marginLeft: isStart ? "2px" : "0", marginRight: isEnd ? "2px" : "0",
+                        }} title={`${task.description} (${task.expectedDuration || 1}d)`} />
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ScheduleView({ state, dispatch }) {
+  const project = getActiveProject(state);
+  if (!project) return <ProjectsList state={state} dispatch={dispatch} />;
+  const tasks = getNormalizedTasks(project);
+
+  return (
+    <div className="fade-in" style={{ maxWidth: "1200px" }}>
+      <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], marginBottom: "8px", letterSpacing: "-0.02em" }}>
+        Schedule — {project.jobName}
+      </h2>
+      <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "24px" }}>
+        4-week view: 1 week lookback + 3 weeks forward. Task bars show duration from target date.
+      </p>
+      <Card>
+        <ThreeWeekLookAhead tasks={tasks} interactive />
+      </Card>
+    </div>
+  );
+}
+
+// ─── Task Editor Component ─────────────────────────────────
+function TaskEditor({ tasks, dispatch, dailyReports = [], projectId }) {
   // Calculate actual hours from daily reports
   const projectDailies = dailyReports.filter(r => r.projectId === projectId);
   const allTaskHours = projectDailies.flatMap(r => r.taskHours || []);
-  const getActualHours = (milestoneId, taskId) => {
+  const getActualHours = (taskId) => {
     return allTaskHours
-      .filter(h => h.milestoneId === milestoneId && h.taskId === taskId)
+      .filter(h => h.taskId === taskId)
       .reduce((sum, h) => sum + (h.hours || 0), 0);
   };
 
-  if (milestones.length === 0) {
-    return <p style={{ fontSize: "13px", color: T.neutral[400] }}>No milestones yet. Click "Add Milestone" to create one.</p>;
+  if (tasks.length === 0) {
+    return <p style={{ fontSize: "13px", color: T.neutral[400] }}>No tasks yet. Click "Add Task" to create one, then use the checkboxes to mark it as a milestone or delay.</p>;
   }
 
+  const handleDragStart = (e, index) => {
+    e.dataTransfer.setData("text/plain", index.toString());
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDrop = (e, dropIndex) => {
+    e.preventDefault();
+    const dragIndex = parseInt(e.dataTransfer.getData("text/plain"), 10);
+    if (dragIndex === dropIndex) return;
+    const reordered = [...tasks];
+    const [moved] = reordered.splice(dragIndex, 1);
+    reordered.splice(dropIndex, 0, moved);
+    dispatch({ type: "REORDER_TASKS", tasks: reordered.map((t, i) => ({ ...t, sortOrder: i })) });
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-      {milestones.map(m => {
-        const status = m.status || (m.completionDate ? "complete" : "not_started");
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      {tasks.map((t, index) => {
+        const status = t.status || "not_started";
         const nextStatus = status === "not_started" ? "in_progress" : status === "in_progress" ? "complete" : "not_started";
         const statusColors = {
           not_started: { bg: T.neutral[200], text: T.neutral[600], label: "Not Started" },
@@ -2491,171 +2658,97 @@ function MilestoneEditor({ milestones, dispatch, dailyReports = [], projectId })
           complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
         };
         const sc = statusColors[status] || statusColors.not_started;
-        const isExpanded = expandedIds.includes(m.id);
-        const tasks = m.tasks || [];
-        const totalEstHours = tasks.reduce((sum, t) => sum + (parseFloat(t.estimatedHours) || 0), 0);
-        const totalActualHours = tasks.reduce((sum, t) => sum + getActualHours(m.id, t.id), 0);
+        const actualHours = getActualHours(t.id);
+        const estHours = t.expectedDuration || 0;
+        const isOver = actualHours > estHours && estHours > 0;
 
         return (
-          <div key={m.id} style={{ border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, overflow: "hidden" }}>
-            {/* Milestone Header */}
-            <div style={{ padding: "12px 14px", background: T.neutral[50], display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-              <button onClick={() => toggleExpand(m.id)} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "2px", color: T.neutral[500] }}>
-                {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-              </button>
-              <input value={m.description} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { description: e.target.value } })}
-                placeholder="Milestone description..." style={{ flex: 1, minWidth: "150px", padding: "6px 10px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", fontWeight: 500, outline: "none" }}
+          <div
+            key={t.id}
+            draggable
+            onDragStart={e => handleDragStart(e, index)}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => handleDrop(e, index)}
+            style={{
+              border: `1.5px solid ${t.isDelay ? T.red[300] : T.neutral[200]}`,
+              borderRadius: T.radius.md,
+              borderLeft: t.isDelay ? `4px solid ${T.red[500]}` : t.isMilestone ? `4px solid ${T.orange[500]}` : `4px solid ${T.neutral[300]}`,
+              background: t.isDelay ? "rgba(239,68,68,0.04)" : T.white,
+              padding: "12px 14px",
+              cursor: "grab",
+            }}
+          >
+            {/* Row 1: Drag handle, Description, Hours, Status, Delete */}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+              <div style={{ cursor: "grab", color: T.neutral[400], flexShrink: 0 }} title="Drag to reorder">☰</div>
+              <input value={t.description} onChange={e => dispatch({ type: "UPDATE_TASK", id: t.id, data: { description: e.target.value } })}
+                placeholder={t.isMilestone ? "Milestone description..." : t.isDelay ? "Delay description..." : "Task description..."}
+                style={{ flex: 1, minWidth: "150px", padding: "6px 10px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", fontWeight: 500, outline: "none" }}
               />
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
-                  <span style={{ fontSize: "10px", color: T.neutral[400] }}>Start</span>
-                  <input type="date" value={m.startDate || ""} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { startDate: e.target.value } })}
-                    style={{ padding: "4px 6px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "11px", outline: "none", width: "110px" }}
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <div style={{ textAlign: "center", minWidth: "55px" }}>
+                  <div style={{ fontSize: "9px", color: T.neutral[400], marginBottom: "1px" }}>Duration</div>
+                  <input type="number" step="1" min="0" value={t.expectedDuration || ""} onChange={e => dispatch({ type: "UPDATE_TASK", id: t.id, data: { expectedDuration: parseInt(e.target.value) || 0 } })}
+                    placeholder="0" style={{ width: "50px", padding: "4px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none", textAlign: "center", background: T.white }}
                   />
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
-                  <span style={{ fontSize: "10px", color: T.neutral[400] }}>Target</span>
-                  <input type="date" value={m.targetDate || ""} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { targetDate: e.target.value } })}
-                    style={{ padding: "4px 6px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "11px", outline: "none", width: "110px" }}
-                  />
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
-                  <span style={{ fontSize: "10px", color: T.neutral[400] }}>Completed</span>
-                  <input type="date" value={m.completionDate || m.actualDate || ""} onChange={e => dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { completionDate: e.target.value, actualDate: e.target.value } })}
-                    style={{ padding: "4px 6px", border: `1px solid ${status === "complete" ? T.green[500] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "11px", outline: "none", width: "110px", background: status === "complete" ? T.green[50] : T.white }}
-                  />
-                </div>
+                {actualHours > 0 && (
+                  <div style={{ textAlign: "center", minWidth: "50px" }}>
+                    <div style={{ fontSize: "9px", color: T.neutral[400], marginBottom: "1px" }}>Actual</div>
+                    <div style={{ padding: "4px", fontSize: "12px", fontWeight: 600, color: isOver ? T.red[500] : T.navy[600] }}>
+                      {actualHours}h
+                    </div>
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => {
                   const today = toISODate(new Date());
                   const data = { status: nextStatus };
-                  if (nextStatus === "in_progress") {
-                    data.startDate = today;
-                    data.inProgressDate = today; // backwards compat
-                  } else if (nextStatus === "complete") {
-                    data.completionDate = today;
-                    data.actualDate = today; // backwards compat
-                  } else {
-                    // Reset all dates when going back to not_started
-                    data.startDate = "";
-                    data.inProgressDate = "";
-                    data.completionDate = "";
-                    data.actualDate = "";
-                  }
-                  dispatch({ type: "UPDATE_MILESTONE", id: m.id, data });
+                  if (nextStatus === "in_progress" && !t.targetDate) data.targetDate = "";
+                  if (nextStatus === "complete") data.actualCompletionDate = today;
+                  if (nextStatus === "not_started") { data.actualCompletionDate = ""; }
+                  dispatch({ type: "UPDATE_TASK", id: t.id, data });
                 }}
                 style={{ padding: "5px 10px", border: "none", borderRadius: T.radius.sm, fontSize: "11px", fontWeight: 600, cursor: "pointer", background: sc.bg, color: sc.text, whiteSpace: "nowrap" }}
               >
                 {sc.label}
               </button>
-              <button onClick={() => dispatch({ type: "REMOVE_MILESTONE", id: m.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px", color: T.neutral[400] }}
+              <button onClick={() => dispatch({ type: "REMOVE_TASK", id: t.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "4px", color: T.neutral[400] }}
                 onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
                 onMouseLeave={e => { e.currentTarget.style.color = T.neutral[400]; }}
               >
                 <Trash2 size={16} />
               </button>
             </div>
-
-            {/* Expanded Tasks Section */}
-            {isExpanded && (
-              <div style={{ padding: "12px 14px 16px", borderTop: `1px solid ${T.neutral[200]}`, background: T.white }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
-                  <span style={{ fontSize: "12px", fontWeight: 600, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                    Tasks {tasks.length > 0 && (
-                      <span style={{ fontWeight: 400, textTransform: "none" }}>
-                        — {totalActualHours}h / {totalEstHours}h
-                        {totalActualHours > totalEstHours && <span style={{ color: T.red[500], marginLeft: "4px" }}>(+{totalActualHours - totalEstHours}h over)</span>}
-                      </span>
-                    )}
-                  </span>
-                  <Btn icon={Plus} size="sm" variant="secondary" onClick={() => dispatch({ type: "ADD_TASK", milestoneId: m.id })}>Add Task</Btn>
-                </div>
-                {tasks.length === 0 ? (
-                  <p style={{ fontSize: "12px", color: T.neutral[400], paddingLeft: "4px" }}>No tasks. Click "Add Task" to break this milestone into trackable work items.</p>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                    {tasks.map(t => {
-                      const tStatus = t.status || "not_started";
-                      const tNextStatus = tStatus === "not_started" ? "in_progress" : tStatus === "in_progress" ? "complete" : "not_started";
-                      const tStatusColors = {
-                        not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Pending" },
-                        in_progress: { bg: "#fef3c7", text: "#92400e", label: "Active" },
-                        complete: { bg: T.green[100], text: T.green[500], label: "Done" }
-                      };
-                      const tsc = tStatusColors[tStatus] || tStatusColors.not_started;
-                      const actualHours = getActualHours(m.id, t.id);
-                      const estHours = parseFloat(t.estimatedHours) || 0;
-                      const isOver = actualHours > estHours && estHours > 0;
-                      return (
-                        <div key={t.id} style={{ padding: "8px 10px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, background: T.neutral[50] }}>
-                          {/* Task row 1: Description, Hours, Status, Delete */}
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-                            <input value={t.description} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { description: e.target.value } })}
-                              placeholder="Task description..." style={{ flex: 1, padding: "6px 8px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none", background: T.white }}
-                            />
-                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                              <div style={{ textAlign: "center", minWidth: "55px" }}>
-                                <div style={{ fontSize: "9px", color: T.neutral[400], marginBottom: "1px" }}>Est.</div>
-                                <input type="number" step="0.5" min="0" value={t.estimatedHours || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { estimatedHours: parseFloat(e.target.value) || 0 } })}
-                                  placeholder="0" style={{ width: "50px", padding: "4px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none", textAlign: "center", background: T.white }}
-                                />
-                              </div>
-                              <div style={{ textAlign: "center", minWidth: "50px" }}>
-                                <div style={{ fontSize: "9px", color: T.neutral[400], marginBottom: "1px" }}>Actual</div>
-                                <div style={{ padding: "4px", fontSize: "12px", fontWeight: 600, color: isOver ? T.red[500] : T.navy[600] }}>
-                                  {actualHours}h
-                                </div>
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => {
-                                const today = toISODate(new Date());
-                                const data = { status: tNextStatus };
-                                if (tNextStatus === "in_progress" && !t.startDate) data.startDate = today;
-                                if (tNextStatus === "complete" && !t.completionDate) data.completionDate = today;
-                                if (tNextStatus === "not_started") { data.startDate = ""; data.completionDate = ""; }
-                                dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data });
-                              }}
-                              style={{ padding: "4px 8px", border: "none", borderRadius: T.radius.sm, fontSize: "10px", fontWeight: 600, cursor: "pointer", background: tsc.bg, color: tsc.text }}
-                            >
-                              {tsc.label}
-                            </button>
-                            <button onClick={() => dispatch({ type: "REMOVE_TASK", milestoneId: m.id, taskId: t.id })} style={{ background: "transparent", border: "none", cursor: "pointer", padding: "2px", color: T.neutral[300] }}
-                              onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
-                              onMouseLeave={e => { e.currentTarget.style.color = T.neutral[300]; }}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                          {/* Task row 2: Dates */}
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px", paddingLeft: "4px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                              <span style={{ fontSize: "10px", color: T.neutral[400] }}>Start:</span>
-                              <input type="date" value={t.startDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { startDate: e.target.value } })}
-                                style={{ padding: "3px 5px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: T.white }}
-                              />
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                              <span style={{ fontSize: "10px", color: T.neutral[400] }}>Target:</span>
-                              <input type="date" value={t.targetDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { targetDate: e.target.value } })}
-                                style={{ padding: "3px 5px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: T.white }}
-                              />
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                              <span style={{ fontSize: "10px", color: T.neutral[400] }}>Complete:</span>
-                              <input type="date" value={t.completionDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", milestoneId: m.id, taskId: t.id, data: { completionDate: e.target.value } })}
-                                style={{ padding: "3px 5px", border: `1px solid ${tStatus === "complete" ? T.green[500] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: tStatus === "complete" ? T.green[50] : T.white }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+            {/* Row 2: Type toggles, Target date, Completion date */}
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", paddingLeft: "24px", flexWrap: "wrap" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", color: T.neutral[500], cursor: "pointer" }}>
+                <input type="checkbox" checked={t.isMilestone || false} onChange={e => dispatch({ type: "UPDATE_TASK", id: t.id, data: { isMilestone: e.target.checked, isDelay: e.target.checked ? false : t.isDelay } })}
+                  style={{ width: "14px", height: "14px", accentColor: T.orange[500] }}
+                />
+                Milestone
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", color: T.neutral[500], cursor: "pointer" }}>
+                <input type="checkbox" checked={t.isDelay || false} onChange={e => dispatch({ type: "UPDATE_TASK", id: t.id, data: { isDelay: e.target.checked, isMilestone: e.target.checked ? false : t.isMilestone } })}
+                  style={{ width: "14px", height: "14px", accentColor: T.red[500] }}
+                />
+                Delay
+              </label>
+              <div style={{ width: "1px", height: "16px", background: T.neutral[200] }} />
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ fontSize: "10px", color: T.neutral[400] }}>Target:</span>
+                <input type="date" value={t.targetDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", id: t.id, data: { targetDate: e.target.value } })}
+                  style={{ padding: "3px 5px", border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: T.white }}
+                />
               </div>
-            )}
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ fontSize: "10px", color: T.neutral[400] }}>Completed:</span>
+                <input type="date" value={t.actualCompletionDate || ""} onChange={e => dispatch({ type: "UPDATE_TASK", id: t.id, data: { actualCompletionDate: e.target.value } })}
+                  style={{ padding: "3px 5px", border: `1px solid ${status === "complete" ? T.green[500] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "10px", outline: "none", background: status === "complete" ? T.green[50] : T.white }}
+                />
+              </div>
+            </div>
           </div>
         );
       })}
@@ -2684,11 +2777,20 @@ function ProjectSetup({ state, dispatch }) {
       </Card>
 
       <Card style={{ marginBottom: "20px" }}>
-        <SectionTitle icon={CircleDot} action={<Btn icon={Plus} size="sm" onClick={() => dispatch({ type: "ADD_MILESTONE" })}>Add Milestone</Btn>}>
-          Milestones & Tasks
+        <SectionTitle icon={CircleDot} action={
+          <Btn icon={Plus} size="sm" onClick={() => dispatch({ type: "ADD_TASK" })}>Add Task</Btn>
+        }>
+          Tasks & Milestones
         </SectionTitle>
-        <MilestoneEditor milestones={getNormalizedMilestones(project)} dispatch={dispatch} dailyReports={state.dailyReports} projectId={project.id} />
+        <TaskEditor tasks={getNormalizedTasks(project)} dispatch={dispatch} dailyReports={state.dailyReports} projectId={project.id} />
       </Card>
+
+      {getNormalizedTasks(project).length > 0 && (
+        <Card style={{ marginBottom: "20px" }}>
+          <SectionTitle icon={Calendar}>Schedule Preview</SectionTitle>
+          <ThreeWeekLookAhead tasks={getNormalizedTasks(project)} />
+        </Card>
+      )}
 
       <Card style={{ marginBottom: "20px" }}>
         <SectionTitle icon={Truck} action={
@@ -2740,26 +2842,18 @@ function ProjectSetup({ state, dispatch }) {
 }
 
 // ─── Task Hours Entry Component ──────────────────────────────────
-function TaskHoursEntry({ milestones, taskHours, reportDate, dispatch }) {
-  // Only show milestones that are in-progress as of the report date
-  const inProgressMilestones = milestones.filter(m => {
-    const startDate = m.startDate || m.inProgressDate || "";
-    const completionDate = m.completionDate || m.actualDate || "";
-    // In progress if: started on or before this date AND not completed before this date
-    if (!startDate || startDate > reportDate) return false;
-    if (completionDate && completionDate < reportDate) return false;
+function TaskHoursEntry({ tasks, taskHours, reportDate, dispatch }) {
+  // Only show tasks that are in-progress as of the report date
+  const activeTasks = (tasks || []).filter(t => {
+    if (t.status === "complete" && t.actualCompletionDate && t.actualCompletionDate < reportDate) return false;
+    if (t.status === "not_started") return false;
     return true;
   });
 
-  // Filter to milestones with tasks
-  const milestonesWithTasks = inProgressMilestones.filter(m => (m.tasks || []).length > 0);
+  if (activeTasks.length === 0) return null;
 
-  if (milestonesWithTasks.length === 0) {
-    return null; // Don't show if no active tasks
-  }
-
-  const getHoursForTask = (milestoneId, taskId) => {
-    const entry = (taskHours || []).find(h => h.milestoneId === milestoneId && h.taskId === taskId);
+  const getHoursForTask = (taskId) => {
+    const entry = (taskHours || []).find(h => h.taskId === taskId);
     return entry?.hours || 0;
   };
 
@@ -2771,42 +2865,33 @@ function TaskHoursEntry({ milestones, taskHours, reportDate, dispatch }) {
       <p style={{ fontSize: "12px", color: T.neutral[500], marginBottom: "12px" }}>
         Log hours worked on tasks today. {totalHoursLogged > 0 && <span style={{ fontWeight: 600, color: T.orange[500] }}>Total: {totalHoursLogged}h</span>}
       </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-        {milestonesWithTasks.map(m => (
-          <div key={m.id}>
-            <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[700], marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
-              <CircleDot size={14} style={{ color: T.orange[400] }} />
-              {m.description}
+      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        {activeTasks.map(t => {
+          const hours = getHoursForTask(t.id);
+          return (
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1 }}>
+                {t.isMilestone && <CircleDot size={14} style={{ color: T.orange[400] }} />}
+                {t.isDelay && <AlertTriangle size={14} style={{ color: T.red[400] }} />}
+                <span style={{ fontSize: "13px", color: t.isDelay ? T.red[600] : T.navy[600] }}>
+                  {t.description || "(Unnamed task)"}
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  value={hours || ""}
+                  placeholder="0"
+                  onChange={e => dispatch({ type: "UPDATE_TASK_HOURS", taskId: t.id, hours: parseFloat(e.target.value) || 0 })}
+                  style={{ width: "60px", padding: "6px 8px", border: `1.5px solid ${hours > 0 ? T.orange[400] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", textAlign: "center", outline: "none", background: hours > 0 ? T.orange[100] : T.white }}
+                />
+                <span style={{ fontSize: "12px", color: T.neutral[500] }}>hrs</span>
+              </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px", paddingLeft: "20px" }}>
-              {(m.tasks || []).filter(t => t.status !== "complete").map(t => {
-                const hours = getHoursForTask(m.id, t.id);
-                return (
-                  <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <span style={{ flex: 1, fontSize: "13px", color: T.navy[600] }}>
-                      {t.description || "(Unnamed task)"}
-                      <span style={{ color: T.neutral[400], marginLeft: "8px", fontSize: "11px" }}>
-                        ({t.estimatedHours || 0}h est.)
-                      </span>
-                    </span>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        value={hours || ""}
-                        placeholder="0"
-                        onChange={e => dispatch({ type: "UPDATE_TASK_HOURS", milestoneId: m.id, taskId: t.id, hours: parseFloat(e.target.value) || 0 })}
-                        style={{ width: "60px", padding: "6px 8px", border: `1.5px solid ${hours > 0 ? T.orange[400] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", textAlign: "center", outline: "none", background: hours > 0 ? T.orange[100] : T.white }}
-                      />
-                      <span style={{ fontSize: "12px", color: T.neutral[500] }}>hrs</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </Card>
   );
@@ -3382,20 +3467,14 @@ function DailyEntry({ state, dispatch }) {
       </div>
 
       <Card style={{ marginBottom: "16px" }}>
-        <SectionTitle icon={CheckCircle2}>Milestone Check-In</SectionTitle>
+        <SectionTitle icon={CheckCircle2}>Task Status Check-In</SectionTitle>
         <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>Click to update status as of {fmtDate(report.date)}</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {(project.milestones || []).map(m => {
-            // Calculate status as of this report's date (supports both old and new field names)
+          {getNormalizedTasks(project).map(t => {
+            const reportDate = report.date;
             const getStatusAsOfDate = () => {
-              const reportDate = report.date;
-              const completionDate = m.completionDate || m.actualDate || "";
-              const startDate = m.startDate || m.inProgressDate || "";
-              // If completed before or on this date, show complete
-              if (completionDate && completionDate <= reportDate) return "complete";
-              // If in progress started before or on this date, show in progress
-              if (startDate && startDate <= reportDate) return "in_progress";
-              // Otherwise not started
+              if (t.actualCompletionDate && t.actualCompletionDate <= reportDate) return "complete";
+              if (t.status === "in_progress") return "in_progress";
               return "not_started";
             };
             const status = getStatusAsOfDate();
@@ -3406,59 +3485,50 @@ function DailyEntry({ state, dispatch }) {
             };
             const statusStyle = statusColors[status] || statusColors.not_started;
             const cycleStatus = () => {
-              // Cycle status and set the date to THIS REPORT'S date
-              // Write both old and new field names for backwards compatibility
               const reportDate = report.date;
               if (status === "not_started") {
-                // Move to in_progress as of this report's date
-                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "in_progress", startDate: reportDate, inProgressDate: reportDate } });
+                dispatch({ type: "UPDATE_TASK", id: t.id, data: { status: "in_progress" } });
               } else if (status === "in_progress") {
-                // Move to complete as of this report's date
-                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: { status: "complete", completionDate: reportDate, actualDate: reportDate } });
+                dispatch({ type: "UPDATE_TASK", id: t.id, data: { status: "complete", actualCompletionDate: reportDate } });
               } else {
-                // Reset to not_started (clear dates that are >= this report's date)
-                const completionDate = m.completionDate || m.actualDate || "";
-                const startDate = m.startDate || m.inProgressDate || "";
-                const newData = { status: "not_started" };
-                if (startDate && startDate >= reportDate) { newData.startDate = ""; newData.inProgressDate = ""; }
-                if (completionDate && completionDate >= reportDate) { newData.completionDate = ""; newData.actualDate = ""; }
-                dispatch({ type: "UPDATE_MILESTONE", id: m.id, data: newData });
+                dispatch({ type: "UPDATE_TASK", id: t.id, data: { status: "not_started", actualCompletionDate: "" } });
               }
             };
             return (
-              <button key={m.id} onClick={cycleStatus}
+              <button key={t.id} onClick={cycleStatus}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   padding: "10px 14px", borderRadius: T.radius.md, cursor: "pointer",
                   border: `1.5px solid ${statusStyle.border}`,
-                  background: status === "complete" ? T.green[50] : T.white,
+                  borderLeft: t.isDelay ? `4px solid ${T.red[500]}` : t.isMilestone ? `4px solid ${T.orange[500]}` : `1.5px solid ${statusStyle.border}`,
+                  background: status === "complete" ? T.green[50] : t.isDelay ? "rgba(239,68,68,0.04)" : T.white,
                   transition: "all 0.15s", textAlign: "left",
                 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
                   {status === "complete" && <Check size={16} style={{ color: T.green[500], flexShrink: 0 }} />}
-                  <span style={{ fontSize: "13px", fontWeight: 500, color: status === "complete" ? T.green[600] : T.navy[700], textDecoration: status === "complete" ? "line-through" : "none" }}>
-                    {m.description}
+                  <span style={{ fontSize: "13px", fontWeight: 500, color: t.isDelay ? T.red[600] : status === "complete" ? T.green[600] : T.navy[700], textDecoration: status === "complete" ? "line-through" : "none" }}>
+                    {t.description}
                   </span>
+                  {t.isMilestone && <span style={{ fontSize: "10px", color: T.orange[500], fontWeight: 600 }}>MILESTONE</span>}
+                  {t.isDelay && <span style={{ fontSize: "10px", color: T.red[500], fontWeight: 600 }}>DELAY</span>}
                 </div>
                 <span style={{
                   fontSize: "11px", fontWeight: 600, padding: "3px 8px", borderRadius: "4px",
-                  background: statusStyle.bg,
-                  color: statusStyle.text,
-                  flexShrink: 0, marginLeft: "12px",
+                  background: statusStyle.bg, color: statusStyle.text, flexShrink: 0, marginLeft: "12px",
                 }}>
                   {statusStyle.label}
                 </span>
               </button>
             );
           })}
-          {(project.milestones || []).length === 0 && (
-            <span style={{ fontSize: "13px", color: T.neutral[400] }}>No milestones defined. Add them in Project Setup.</span>
+          {getNormalizedTasks(project).length === 0 && (
+            <span style={{ fontSize: "13px", color: T.neutral[400] }}>No tasks defined. Add them in Project Setup.</span>
           )}
         </div>
       </Card>
 
       <TaskHoursEntry
-        milestones={getNormalizedMilestones(project)}
+        tasks={getNormalizedTasks(project)}
         taskHours={report.taskHours || []}
         reportDate={report.date}
         dispatch={dispatch}
@@ -3775,17 +3845,14 @@ function DailyView({ state, dispatch }) {
         ))}
       </div>
 
-      {/* Milestone Status Section */}
+      {/* Task Status Section */}
       <Card style={{ marginBottom: "16px" }}>
-        <div style={{ fontSize: "12px", fontWeight: 700, color: T.orange[500], textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "12px" }}>Milestone Status</div>
-        {(project.milestones || []).length > 0 ? (
+        <div style={{ fontSize: "12px", fontWeight: 700, color: T.orange[500], textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "12px" }}>Task Status</div>
+        {getNormalizedTasks(project).length > 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {(project.milestones || []).map(m => {
-              const completionDate = m.completionDate || m.actualDate || "";
-              const startDate = m.startDate || m.inProgressDate || "";
-              let status = "not_started";
-              if (completionDate && completionDate <= report.date) status = "complete";
-              else if (startDate && startDate <= report.date) status = "in_progress";
+            {getNormalizedTasks(project).map(t => {
+              let status = t.status || "not_started";
+              if (t.actualCompletionDate && t.actualCompletionDate <= report.date) status = "complete";
               const statusColors = {
                 not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Not Started" },
                 in_progress: { bg: T.yellow[100], text: T.yellow[700], label: "In Progress" },
@@ -3793,19 +3860,22 @@ function DailyView({ state, dispatch }) {
               };
               const statusStyle = statusColors[status];
               return (
-                <div key={m.id} style={{
+                <div key={t.id} style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   padding: "10px 14px", borderRadius: T.radius.md,
-                  background: status === "complete" ? T.green[50] : T.neutral[50],
+                  background: status === "complete" ? T.green[50] : t.isDelay ? "rgba(239,68,68,0.04)" : T.neutral[50],
                   border: `1px solid ${status === "complete" ? T.green[500] : status === "in_progress" ? T.yellow[400] : T.neutral[200]}`,
+                  borderLeft: t.isDelay ? `4px solid ${T.red[500]}` : t.isMilestone ? `4px solid ${T.orange[500]}` : undefined,
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
                     {status === "complete" && <Check size={16} style={{ color: T.green[500], flexShrink: 0 }} />}
                     {status === "in_progress" && <Clock size={16} style={{ color: T.yellow[600], flexShrink: 0 }} />}
                     {status === "not_started" && <Circle size={16} style={{ color: T.neutral[400], flexShrink: 0 }} />}
-                    <span style={{ fontSize: "13px", fontWeight: 500, color: status === "complete" ? T.green[600] : T.navy[700], textDecoration: status === "complete" ? "line-through" : "none" }}>
-                      {m.description}
+                    <span style={{ fontSize: "13px", fontWeight: 500, color: t.isDelay ? T.red[600] : status === "complete" ? T.green[600] : T.navy[700], textDecoration: status === "complete" ? "line-through" : "none" }}>
+                      {t.description}
                     </span>
+                    {t.isMilestone && <span style={{ fontSize: "10px", color: T.orange[500], fontWeight: 600 }}>MILESTONE</span>}
+                    {t.isDelay && <span style={{ fontSize: "10px", color: T.red[500], fontWeight: 600 }}>DELAY</span>}
                   </div>
                   <span style={{
                     fontSize: "11px", fontWeight: 600, padding: "3px 8px", borderRadius: "4px",
@@ -3818,29 +3888,29 @@ function DailyView({ state, dispatch }) {
             })}
           </div>
         ) : (
-          <p style={{ fontSize: "13px", color: T.neutral[400] }}>No milestones defined for this project.</p>
+          <p style={{ fontSize: "13px", color: T.neutral[400] }}>No tasks defined for this project.</p>
         )}
       </Card>
 
       {/* Task Hours Section */}
       {(report.taskHours || []).length > 0 && (() => {
-        const normalizedMilestones = getNormalizedMilestones(project);
-        const totalHours = (report.taskHours || []).reduce((sum, h) => sum + (h.hours || 0), 0);
+        const tasks = getNormalizedTasks(project);
+        const totalHoursLogged = (report.taskHours || []).reduce((sum, h) => sum + (h.hours || 0), 0);
         return (
           <Card style={{ marginBottom: "16px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
               <div style={{ fontSize: "12px", fontWeight: 700, color: T.orange[500], textTransform: "uppercase", letterSpacing: "0.06em" }}>Task Hours Logged</div>
-              <span style={{ fontSize: "13px", fontWeight: 700, color: T.orange[500] }}>{totalHours}h total</span>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: T.orange[500] }}>{totalHoursLogged}h total</span>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
               {report.taskHours.filter(h => h.hours > 0).map(h => {
-                const milestone = normalizedMilestones.find(m => m.id === h.milestoneId);
-                const task = (milestone?.tasks || []).find(t => t.id === h.taskId);
+                const task = tasks.find(t => t.id === h.taskId);
                 return (
-                  <div key={`${h.milestoneId}-${h.taskId}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: T.neutral[50], borderRadius: T.radius.sm }}>
+                  <div key={h.taskId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: T.neutral[50], borderRadius: T.radius.sm }}>
                     <div>
                       <span style={{ fontSize: "13px", fontWeight: 500, color: T.navy[700] }}>{task?.description || "(Unknown task)"}</span>
-                      <span style={{ fontSize: "11px", color: T.neutral[400], marginLeft: "8px" }}>— {milestone?.description || "(Unknown milestone)"}</span>
+                      {task?.isMilestone && <span style={{ color: T.orange[500], fontSize: "11px", marginLeft: "8px" }}>(Milestone)</span>}
+                      {task?.isDelay && <span style={{ color: T.red[500], fontSize: "11px", marginLeft: "8px" }}>(Delay)</span>}
                     </div>
                     <span style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800], background: T.orange[100], padding: "2px 8px", borderRadius: "4px" }}>{h.hours}h</span>
                   </div>
@@ -4029,30 +4099,28 @@ function WeeklyGenerator({ state, dispatch }) {
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={CircleDot}>Milestone Tracking</SectionTitle>
         <div style={{ fontSize: "11px", color: T.neutral[500], marginBottom: "12px" }}>
-          Milestone = Owner Contract Schedule &ensp;|&ensp; Target = Sub OPS Schedule
+          Milestones for this project
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr style={{ background: T.navy[800] }}>
-              {["Description","Milestone","Target","Status"].map(h => (
+              {["Description","Target","Status"].map(h => (
                 <th key={h} scope="col" style={{ padding: "10px 14px", textAlign: "left", color: T.white, fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {project.milestones.map((m, i) => {
-              const status = m.status || (m.actualDate ? "complete" : "not_started");
+            {getNormalizedTasks(project).filter(t => t.isMilestone).map((t, i) => {
               const statusColors = {
                 not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Not Started" },
                 in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
                 complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
               };
-              const sc = statusColors[status] || statusColors.not_started;
+              const sc = statusColors[t.status] || statusColors.not_started;
               return (
-                <tr key={m.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
-                  <td style={{ padding: "9px 14px", fontWeight: 500, color: status === "complete" ? T.green[500] : status === "in_progress" ? "#92400e" : T.navy[800] }}>{m.description}</td>
-                  <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(m.milestoneDate)}</td>
-                  <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(m.targetDate)}</td>
+                <tr key={t.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
+                  <td style={{ padding: "9px 14px", fontWeight: 500, color: t.status === "complete" ? T.green[500] : t.status === "in_progress" ? "#92400e" : T.navy[800] }}>{t.description}</td>
+                  <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(t.targetDate)}</td>
                   <td style={{ padding: "9px 14px" }}>
                     <span style={{ padding: "3px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, background: sc.bg, color: sc.text }}>{sc.label}</span>
                   </td>
@@ -4307,8 +4375,9 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
     const roleKeys = ["indirectLabor", "apprentices", "foreman", "operators", "laborers", "carpenters", "cementMasons"];
     return sum + roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
   }, 0);
-  const completedMilestones = project.milestones?.filter(m => (m.status || (m.actualDate ? "complete" : "not_started")) === "complete")?.length || 0;
-  const totalMilestones = project.milestones?.length || 0;
+  const allTasks = getNormalizedTasks(project);
+  const completedTasks = allTasks.filter(t => t.status === "complete").length;
+  const totalTasks = allTasks.length;
   const allPhotos = projectDailies.flatMap(r => (r.photos || []).map(p => ({ ...p, date: r.date })));
   const recentDelays = projectDailies.slice(0, 7).filter(r => r.delaysProblems && !isNoIncident(r.delaysProblems)).map(r => ({ date: r.date, issue: r.delaysProblems }));
 
@@ -4329,7 +4398,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: question.trim(),
-          project: { jobName: project.jobName, jobNumber: project.jobNumber, client: project.client, milestones: project.milestones },
+          project: { jobName: project.jobName, jobNumber: project.jobNumber, client: project.client, tasks: getNormalizedTasks(project) },
           dailyReports: trimmedReports
         })
       });
@@ -4481,40 +4550,41 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
             {/* Project Milestones */}
             <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "16px", padding: "24px", marginBottom: "32px" }}>
               <h3 style={{ fontSize: "18px", fontWeight: 700, color: T.white, marginBottom: "20px", display: "flex", alignItems: "center", gap: "10px" }}>
-                <CircleDot size={20} style={{ color: T.orange[500] }} /> Project Milestones
+                <CircleDot size={20} style={{ color: T.orange[500] }} /> Project Tasks
               </h3>
-              {project.milestones?.length > 0 ? (
+              {allTasks.length > 0 ? (
                 <>
                   {/* Desktop Table */}
                   <table className="cp-milestone-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ borderBottom: "2px solid rgba(255,255,255,0.1)" }}>
-                        <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Milestone</th>
+                        <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Task</th>
                         <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Target</th>
                         <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Completed</th>
                         <th style={{ padding: "12px 16px", textAlign: "center", fontSize: "11px", fontWeight: 700, color: T.navy[400], textTransform: "uppercase", letterSpacing: "0.08em" }}>Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {project.milestones.map((m, i) => {
-                        const status = m.status || (m.actualDate ? "complete" : "not_started");
-                        const isComplete = status === "complete";
-                        const isInProgress = status === "in_progress";
-                        const targetDate = m.targetDate ? new Date(m.targetDate) : null;
-                        const actualDate = m.actualDate ? new Date(m.actualDate) : null;
+                      {allTasks.map((t, i) => {
+                        const isComplete = t.status === "complete";
+                        const isInProgress = t.status === "in_progress";
+                        const targetDate = t.targetDate ? new Date(t.targetDate) : null;
+                        const actualDate = t.actualCompletionDate ? new Date(t.actualCompletionDate) : null;
                         const isLate = isComplete && actualDate && targetDate && actualDate > targetDate;
                         const isPastDue = !isComplete && !isInProgress && targetDate && targetDate < new Date();
                         return (
                           <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                             <td style={{ padding: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
                               {isComplete ? <CheckCircle2 size={20} style={{ color: "#4ade80" }} /> : isInProgress ? <Clock size={20} style={{ color: "#fbbf24" }} /> : <Circle size={20} style={{ color: T.navy[500] }} />}
-                              <span style={{ color: T.white, fontWeight: 500, fontSize: "14px" }}>{m.description}</span>
+                              <span style={{ color: t.isDelay ? "#ef4444" : T.white, fontWeight: 500, fontSize: "14px" }}>{t.description}</span>
+                              {t.isMilestone && <span style={{ fontSize: "10px", color: T.orange[500], fontWeight: 600 }}>MILESTONE</span>}
+                              {t.isDelay && <span style={{ fontSize: "10px", color: "#ef4444", fontWeight: 600 }}>DELAY</span>}
                             </td>
                             <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: T.navy[400] }}>
-                              {m.targetDate ? fmtDateShort(m.targetDate) : "—"}
+                              {t.targetDate ? fmtDateShort(t.targetDate) : "—"}
                             </td>
                             <td style={{ padding: "16px", textAlign: "center", fontSize: "14px", color: isComplete ? "#4ade80" : T.navy[500] }}>
-                              {m.actualDate ? fmtDateShort(m.actualDate) : "—"}
+                              {t.actualCompletionDate ? fmtDateShort(t.actualCompletionDate) : "—"}
                             </td>
                             <td style={{ padding: "16px", textAlign: "center" }}>
                               {isComplete ? (
@@ -4536,12 +4606,11 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                   </table>
                   {/* Mobile Cards */}
                   <div className="cp-milestone-cards">
-                    {project.milestones.map((m, i) => {
-                      const status = m.status || (m.actualDate ? "complete" : "not_started");
-                      const isComplete = status === "complete";
-                      const isInProgress = status === "in_progress";
-                      const targetDate = m.targetDate ? new Date(m.targetDate) : null;
-                      const actualDate = m.actualDate ? new Date(m.actualDate) : null;
+                    {allTasks.map((t, i) => {
+                      const isComplete = t.status === "complete";
+                      const isInProgress = t.status === "in_progress";
+                      const targetDate = t.targetDate ? new Date(t.targetDate) : null;
+                      const actualDate = t.actualCompletionDate ? new Date(t.actualCompletionDate) : null;
                       const isLate = isComplete && actualDate && targetDate && actualDate > targetDate;
                       const isPastDue = !isComplete && !isInProgress && targetDate && targetDate < new Date();
                       const statusBg = isComplete ? (isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)") : isInProgress ? "rgba(251,191,36,0.2)" : isPastDue ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.1)";
@@ -4552,18 +4621,18 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                           <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", marginBottom: "12px" }}>
                             {isComplete ? <CheckCircle2 size={22} style={{ color: "#4ade80", flexShrink: 0, marginTop: "2px" }} /> : isInProgress ? <Clock size={22} style={{ color: "#fbbf24", flexShrink: 0, marginTop: "2px" }} /> : <Circle size={22} style={{ color: T.navy[500], flexShrink: 0, marginTop: "2px" }} />}
                             <div style={{ flex: 1 }}>
-                              <div style={{ color: T.white, fontWeight: 600, fontSize: "15px", marginBottom: "8px" }}>{m.description}</div>
+                              <div style={{ color: t.isDelay ? "#ef4444" : T.white, fontWeight: 600, fontSize: "15px", marginBottom: "8px" }}>{t.description}</div>
                               <span style={{ background: statusBg, color: statusColor, padding: "4px 12px", borderRadius: "20px", fontSize: "11px", fontWeight: 600 }}>{statusText}</span>
                             </div>
                           </div>
                           <div style={{ display: "flex", gap: "20px", paddingLeft: "34px" }}>
                             <div>
                               <div style={{ fontSize: "10px", color: T.navy[500], textTransform: "uppercase", marginBottom: "2px" }}>Target</div>
-                              <div style={{ fontSize: "13px", color: T.navy[400] }}>{m.targetDate ? fmtDateShort(m.targetDate) : "—"}</div>
+                              <div style={{ fontSize: "13px", color: T.navy[400] }}>{t.targetDate ? fmtDateShort(t.targetDate) : "—"}</div>
                             </div>
                             <div>
                               <div style={{ fontSize: "10px", color: T.navy[500], textTransform: "uppercase", marginBottom: "2px" }}>Completed</div>
-                              <div style={{ fontSize: "13px", color: isComplete ? "#4ade80" : T.navy[500] }}>{m.actualDate ? fmtDateShort(m.actualDate) : "—"}</div>
+                              <div style={{ fontSize: "13px", color: isComplete ? "#4ade80" : T.navy[500] }}>{t.actualCompletionDate ? fmtDateShort(t.actualCompletionDate) : "—"}</div>
                             </div>
                           </div>
                         </div>
@@ -4572,7 +4641,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                   </div>
                 </>
               ) : (
-                <p style={{ color: T.navy[400], textAlign: "center", padding: "20px" }}>No milestones defined for this project.</p>
+                <p style={{ color: T.navy[400], textAlign: "center", padding: "20px" }}>No tasks defined for this project.</p>
               )}
             </div>
 
@@ -4580,7 +4649,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
             <div className="cp-stats">
               <StatCard label="Daily Reports" value={totalDays} icon={ClipboardEdit} />
               <StatCard label="Workforce Hours" value={totalWorkforceHours.toLocaleString()} icon={Users} color={T.navy[600]} />
-              <StatCard label="Milestones" value={`${completedMilestones}/${totalMilestones}`} icon={CheckCircle2} color="#059669" />
+              <StatCard label="Tasks" value={`${completedTasks}/${totalTasks}`} icon={CheckCircle2} color="#059669" />
               <StatCard label="Photos" value={allPhotos.length} icon={Camera} color="#7c3aed" />
             </div>
 
@@ -5226,6 +5295,7 @@ export default function App() {
       case "dailyView": return <DailyView state={state} dispatch={dispatch} />;
       case "weeklyGen": return <WeeklyGenerator state={state} dispatch={dispatch} />;
       case "weeklyView": return <WeeklyView state={state} dispatch={dispatch} />;
+      case "schedule": return <ScheduleView state={state} dispatch={dispatch} />;
       case "photos": return <PhotoGallery state={state} dispatch={dispatch} />;
       case "safety": return <SafetyMeetings state={state} dispatch={dispatch} />;
       default: return <Dashboard state={state} dispatch={dispatch} />;

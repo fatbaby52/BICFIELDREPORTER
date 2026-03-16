@@ -7,7 +7,7 @@ const toDbProject = (p) => ({
   job_name: p.jobName,
   client: p.client || '',
   prepared_by: p.preparedBy || '',
-  milestones: p.milestones || [],
+  milestones: p.tasks || p.milestones || [],
   equipment_owned: p.equipmentOwned || [],
   equipment_rented: p.equipmentRented || [],
 })
@@ -18,7 +18,7 @@ const fromDbProject = (row) => ({
   jobName: row.job_name || '',
   client: row.client || '',
   preparedBy: row.prepared_by || '',
-  milestones: row.milestones || [],
+  tasks: row.milestones || [],
   equipmentOwned: row.equipment_owned || [],
   equipmentRented: row.equipment_rented || [],
 })
