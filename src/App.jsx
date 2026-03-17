@@ -3928,6 +3928,47 @@ function DailyView({ state, dispatch }) {
   );
 }
 
+// ─── List Editor Item (local state to avoid keystroke re-renders) ─
+function ListEditorItem({ value, onChange, onRemove, showRemove }) {
+  const [local, setLocal] = useState(value);
+  const ref = useRef(null);
+  // Sync from parent when value changes externally (e.g. generate)
+  useEffect(() => { setLocal(value); }, [value]);
+  return (
+    <div style={{ display: "flex", gap: "6px", marginBottom: "4px" }}>
+      <span style={{ fontSize: "13px", color: T.neutral[400], padding: "8px 4px", minWidth: "16px" }}>&bull;</span>
+      <input ref={ref} value={local} onChange={e => setLocal(e.target.value)}
+        onBlur={() => { if (local !== value) onChange(local); }}
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); ref.current?.blur(); } }}
+        style={{ flex: 1, padding: "7px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
+      />
+      {showRemove && (
+        <button onClick={onRemove} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400] }}>
+          <X size={14} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ListEditorComponent({ label, field, items, onUpdate, onAdd, onRemove }) {
+  return (
+    <div style={{ marginBottom: "12px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+        <span style={{ fontSize: "13px", fontWeight: 600, color: T.navy[600] }}>{label}</span>
+        <button onClick={onAdd} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.orange[500], fontSize: "12px", fontWeight: 600 }}>+ Add</button>
+      </div>
+      {items.map((item, i) => (
+        <ListEditorItem key={`${field}-${i}`} value={item}
+          onChange={val => onUpdate(i, val)}
+          onRemove={() => onRemove(i)}
+          showRemove={items.length > 1}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ─── Weekly Generator Component ──────────────────────────────
 function WeeklyGenerator({ state, dispatch }) {
   const weekly = state.editingWeekly;
@@ -3981,61 +4022,20 @@ function WeeklyGenerator({ state, dispatch }) {
 
   const update = (data) => dispatch({ type: "UPDATE_EDITING_WEEKLY", data });
   const updateList = (field, index, value) => {
-    const list = [...weekly[field]];
+    const list = [...(weekly[field] || [])];
     list[index] = value;
     update({ [field]: list });
   };
-  const addListItem = (field) => update({ [field]: [...weekly[field], ""] });
-  const removeListItem = (field, index) => update({ [field]: weekly[field].filter((_, i) => i !== index) });
+  const addListItem = (field) => update({ [field]: [...(weekly[field] || []), ""] });
+  const removeListItem = (field, index) => update({ [field]: (weekly[field] || []).filter((_, i) => i !== index) });
 
-  // Stable keys for list items so inputs don't lose focus on re-render
-  const listKeysRef = useRef({});
-  const getListKeys = (field) => {
-    if (!listKeysRef.current[field]) listKeysRef.current[field] = [];
-    const keys = listKeysRef.current[field];
-    const list = weekly[field] || [];
-    // Grow key array to match list length
-    while (keys.length < list.length) keys.push(`${field}-${Date.now()}-${keys.length}`);
-    // Shrink if items were removed
-    if (keys.length > list.length) keys.length = list.length;
-    return keys;
-  };
-  const addListItemWithKey = (field) => {
-    const keys = getListKeys(field);
-    keys.push(`${field}-${Date.now()}-${keys.length}`);
-    addListItem(field);
-  };
-  const removeListItemWithKey = (field, index) => {
-    const keys = getListKeys(field);
-    keys.splice(index, 1);
-    removeListItem(field, index);
-  };
-
-  const ListEditor = useCallback(({ label, field }) => {
-    const keys = getListKeys(field);
-    const items = weekly[field] || [];
-    return (
-      <div style={{ marginBottom: "12px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-          <span style={{ fontSize: "13px", fontWeight: 600, color: T.navy[600] }}>{label}</span>
-          <button onClick={() => addListItemWithKey(field)} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.orange[500], fontSize: "12px", fontWeight: 600 }}>+ Add</button>
-        </div>
-        {items.map((item, i) => (
-          <div key={keys[i]} style={{ display: "flex", gap: "6px", marginBottom: "4px" }}>
-            <span style={{ fontSize: "13px", color: T.neutral[400], padding: "8px 4px", minWidth: "16px" }}>&bull;</span>
-            <input value={item} onChange={e => updateList(field, i, e.target.value)}
-              style={{ flex: 1, padding: "7px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
-            />
-            {items.length > 1 && (
-              <button onClick={() => removeListItemWithKey(field, i)} style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400] }}>
-                <X size={14} />
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }, [weekly]);
+  const ListEditor = ({ label, field }) => (
+    <ListEditorComponent label={label} field={field} items={weekly[field] || []}
+      onUpdate={(i, val) => updateList(field, i, val)}
+      onAdd={() => addListItem(field)}
+      onRemove={(i) => removeListItem(field, i)}
+    />
+  );
 
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
