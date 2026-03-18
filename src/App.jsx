@@ -604,8 +604,9 @@ const exportDailyExcel = (report, project) => {
   const present = allEquip.filter(e => report.equipmentPresent.includes(e.id));
   const roles = ["Indirect Labor","Apprentices","Foreman","Operators","Laborers","Carpenters","Cement Masons"];
   const roleKeys = ["indirectLabor","apprentices","foreman","operators","laborers","carpenters","cementMasons"];
-  const totalMen = roleKeys.reduce((s, k) => s + (report.workforce[k]?.men || 0), 0);
-  const totalHours = roleKeys.reduce((s, k) => s + ((report.workforce[k]?.men || 0) * (report.workforce[k]?.hours || 0)), 0);
+  const customRoles = report.customRoles || [];
+  const totalMen = roleKeys.reduce((s, k) => s + (report.workforce[k]?.men || 0), 0) + customRoles.reduce((s, r) => s + (r.men || 0), 0);
+  const totalHours = roleKeys.reduce((s, k) => s + ((report.workforce[k]?.men || 0) * (report.workforce[k]?.hours || 0)), 0) + customRoles.reduce((s, r) => s + ((r.men || 0) * (r.hours || 0)), 0);
 
   let csv = "";
   const row = (...cells) => { csv += cells.map(c => `"${String(c || "").replace(/"/g, '""')}"`).join(",") + "\n"; };
@@ -625,6 +626,11 @@ const exportDailyExcel = (report, project) => {
     const men = report.workforce[k]?.men || 0;
     const hrs = report.workforce[k]?.hours || 0;
     row(roles[i], men || "—", men ? hrs : "—", men ? (men * hrs) : "—");
+  });
+  customRoles.forEach(r => {
+    const men = r.men || 0;
+    const hrs = r.hours || 0;
+    row(r.label, men || "—", men ? hrs : "—", men ? (men * hrs) : "—");
   });
   row("Total", totalMen, "", totalHours); row("");
   row("MAJOR EQUIPMENT");
@@ -653,8 +659,9 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
   const present = allEquip.filter(e => report.equipmentPresent.includes(e.id));
   const roles = ["Indirect Labor","Apprentices","Foreman","Operators","Laborers","Carpenters","Cement Masons"];
   const roleKeys = ["indirectLabor","apprentices","foreman","operators","laborers","carpenters","cementMasons"];
-  const totalMen = roleKeys.reduce((s, k) => s + (report.workforce[k]?.men || 0), 0);
-  const totalHours = roleKeys.reduce((s, k) => s + ((report.workforce[k]?.men || 0) * (report.workforce[k]?.hours || 0)), 0);
+  const customRoles = report.customRoles || [];
+  const totalMen = roleKeys.reduce((s, k) => s + (report.workforce[k]?.men || 0), 0) + customRoles.reduce((s, r) => s + (r.men || 0), 0);
+  const totalHours = roleKeys.reduce((s, k) => s + ((report.workforce[k]?.men || 0) * (report.workforce[k]?.hours || 0)), 0) + customRoles.reduce((s, r) => s + ((r.men || 0) * (r.hours || 0)), 0);
 
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Daily Report ${report.date}</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -766,6 +773,11 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
         const men = report.workforce[k]?.men || 0;
         const hrs = report.workforce[k]?.hours || 0;
         return `<tr><td>${roles[i]}</td><td style="text-align:center">${men || "—"}</td><td style="text-align:center">${men ? hrs : "—"}</td><td style="text-align:center">${men ? (men * hrs) : "—"}</td></tr>`;
+      }).join("")}
+      ${customRoles.map(r => {
+        const men = r.men || 0;
+        const hrs = r.hours || 0;
+        return `<tr><td style="font-style:italic">${r.label}</td><td style="text-align:center">${men || "—"}</td><td style="text-align:center">${men ? hrs : "—"}</td><td style="text-align:center">${men ? (men * hrs) : "—"}</td></tr>`;
       }).join("")}
       <tr class="total-row"><td>Total</td><td style="text-align:center">${totalMen}</td><td></td><td style="text-align:center">${totalHours} hrs</td></tr>
     </table>
@@ -1394,7 +1406,7 @@ function reducer(state, action) {
       const newReport = {
         id: `dr-${Date.now()}`, projectId: project.id, date: toISODate(today), day: DAYS[today.getDay()],
         weather: "Sunny / Clear", temperature: "", rainfall: "", incidents: "N/A", shift: { type: "Day", hours: "8hr" },
-        generalNotes: "", workforce: { foreman: { men: 0, hours: 8 }, operators: { men: 0, hours: 8 }, laborers: { men: 0, hours: 8 }, apprentices: { men: 0, hours: 8 }, carpenters: { men: 0, hours: 8 }, cementMasons: { men: 0, hours: 8 }, indirectLabor: { men: 0, hours: 8 } },
+        generalNotes: "", workforce: { foreman: { men: 0, hours: 8 }, operators: { men: 0, hours: 8 }, laborers: { men: 0, hours: 8 }, apprentices: { men: 0, hours: 8 }, carpenters: { men: 0, hours: 8 }, cementMasons: { men: 0, hours: 8 }, indirectLabor: { men: 0, hours: 8 } }, customRoles: [],
         equipmentPresent: [...project.equipmentOwned.map(e => e.id), ...project.equipmentRented.map(e => e.id)],
         equipmentDown: [], thirdPartyUtilities: "", materialDeliveries: "",
         delaysProblems: "", extraWork: "", milestoneHit: null, taskHours: [], photos: [], preparedBy: project.preparedBy || "",
@@ -2955,7 +2967,8 @@ function DailyEntry({ state, dispatch }) {
     Object.keys(report.workforce).forEach(role => {
       updatedWorkforce[role] = { ...report.workforce[role], hours: hoursNum };
     });
-    update({ shift: { ...report.shift, hours: newHours }, workforce: updatedWorkforce });
+    const updatedCustomRoles = (report.customRoles || []).map(r => ({ ...r, hours: hoursNum }));
+    update({ shift: { ...report.shift, hours: newHours }, workforce: updatedWorkforce, customRoles: updatedCustomRoles });
   };
 
   const toggleEquipment = (id) => {
@@ -3213,8 +3226,28 @@ function DailyEntry({ state, dispatch }) {
     { key: "cementMasons", label: "Cement Masons" },
   ];
 
-  const totalMen = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.men || 0), 0);
-  const totalHours = workforceRoles.reduce((sum, r) => sum + ((report.workforce[r.key]?.men || 0) * (report.workforce[r.key]?.hours || 0)), 0);
+  const customRoles = report.customRoles || [];
+  const totalMen = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.men || 0), 0) + customRoles.reduce((sum, r) => sum + (r.men || 0), 0);
+  const totalHours = workforceRoles.reduce((sum, r) => sum + ((report.workforce[r.key]?.men || 0) * (report.workforce[r.key]?.hours || 0)), 0) + customRoles.reduce((sum, r) => sum + ((r.men || 0) * (r.hours || 0)), 0);
+  const [newRoleName, setNewRoleName] = React.useState("");
+  const [addingRole, setAddingRole] = React.useState(false);
+
+  const addCustomRole = () => {
+    if (newRoleName.trim()) {
+      const shiftHours = parseFloat(report.shift.hours) || 8;
+      update({ customRoles: [...customRoles, { id: `custom-${Date.now()}`, label: newRoleName.trim(), men: 0, hours: shiftHours }] });
+      setNewRoleName("");
+      setAddingRole(false);
+    }
+  };
+
+  const updateCustomRole = (id, field, value) => {
+    update({ customRoles: customRoles.map(r => r.id === id ? { ...r, [field]: parseFloat(value) || 0 } : r) });
+  };
+
+  const removeCustomRole = (id) => {
+    update({ customRoles: customRoles.filter(r => r.id !== id) });
+  };
 
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
@@ -3319,6 +3352,97 @@ function DailyEntry({ state, dispatch }) {
               </div>
             );
           })}
+          {/* Custom Roles */}
+          {customRoles.map(cr => {
+            const menVal = cr.men || 0;
+            const hoursVal = cr.hours || 0;
+            const stepperBtn = (onClick, icon) => (
+              <button onClick={onClick} style={{
+                width: "24px", height: "24px", border: "none", borderRadius: "4px",
+                background: T.neutral[100], cursor: "pointer", display: "flex",
+                alignItems: "center", justifyContent: "center", color: T.navy[700],
+                transition: "all 0.15s", flexShrink: 0,
+              }}
+                onMouseEnter={e => { e.currentTarget.style.background = T.orange[100]; e.currentTarget.style.color = T.orange[600]; }}
+                onMouseLeave={e => { e.currentTarget.style.background = T.neutral[100]; e.currentTarget.style.color = T.navy[700]; }}
+              >{icon}</button>
+            );
+            return (
+              <div key={cr.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", marginBottom: "4px", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <button onClick={() => removeCustomRole(cr.id)} style={{
+                    width: "18px", height: "18px", border: "none", borderRadius: "4px",
+                    background: T.neutral[100], cursor: "pointer", display: "flex",
+                    alignItems: "center", justifyContent: "center", color: T.neutral[400],
+                    transition: "all 0.15s", flexShrink: 0,
+                  }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "#fee2e2"; e.currentTarget.style.color = "#dc2626"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = T.neutral[100]; e.currentTarget.style.color = T.neutral[400]; }}
+                  ><X size={10} /></button>
+                  <span style={{ fontSize: "13px", color: T.navy[700], fontStyle: "italic" }}>{cr.label}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
+                  {stepperBtn(() => updateCustomRole(cr.id, "men", Math.max(0, menVal - 1)), <ChevronDown size={12} />)}
+                  <span style={{
+                    minWidth: "24px", textAlign: "center", fontSize: "14px", fontWeight: 700,
+                    color: menVal > 0 ? T.navy[800] : T.neutral[300],
+                  }}>{menVal}</span>
+                  {stepperBtn(() => updateCustomRole(cr.id, "men", menVal + 1), <ChevronUp size={12} />)}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
+                  {menVal > 0 ? (
+                    <>
+                      {stepperBtn(() => updateCustomRole(cr.id, "hours", Math.max(0, hoursVal - 1)), <ChevronDown size={12} />)}
+                      <span style={{
+                        minWidth: "24px", textAlign: "center", fontSize: "14px", fontWeight: 700,
+                        color: T.navy[800],
+                      }}>{hoursVal}</span>
+                      {stepperBtn(() => updateCustomRole(cr.id, "hours", hoursVal + 1), <ChevronUp size={12} />)}
+                    </>
+                  ) : (
+                    <span style={{ minWidth: "24px", textAlign: "center", fontSize: "14px", color: T.neutral[300] }}>—</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {/* Add Custom Role Button/Input */}
+          {addingRole ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px", paddingTop: "8px", borderTop: `1px dashed ${T.neutral[300]}` }}>
+              <input
+                type="text"
+                value={newRoleName}
+                onChange={e => setNewRoleName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") addCustomRole(); if (e.key === "Escape") { setAddingRole(false); setNewRoleName(""); } }}
+                placeholder="Enter role name..."
+                autoFocus
+                style={{
+                  flex: 1, padding: "8px 12px", border: `1px solid ${T.neutral[300]}`, borderRadius: "6px",
+                  fontSize: "13px", outline: "none",
+                }}
+              />
+              <button onClick={addCustomRole} style={{
+                padding: "8px 12px", background: T.orange[500], color: "#fff", border: "none",
+                borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: 600,
+              }}>Add</button>
+              <button onClick={() => { setAddingRole(false); setNewRoleName(""); }} style={{
+                padding: "8px 12px", background: T.neutral[100], color: T.navy[700], border: "none",
+                borderRadius: "6px", cursor: "pointer", fontSize: "13px",
+              }}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => setAddingRole(true)} style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              width: "100%", padding: "8px", marginTop: "8px", border: `1px dashed ${T.neutral[300]}`,
+              borderRadius: "6px", background: "transparent", cursor: "pointer", color: T.neutral[500],
+              fontSize: "13px", transition: "all 0.15s",
+            }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = T.orange[400]; e.currentTarget.style.color = T.orange[600]; e.currentTarget.style.background = T.orange[50]; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = T.neutral[300]; e.currentTarget.style.color = T.neutral[500]; e.currentTarget.style.background = "transparent"; }}
+            >
+              <Plus size={14} /> Add Custom Role
+            </button>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "4px", marginTop: "8px", paddingTop: "8px", borderTop: `2px solid ${T.navy[800]}` }}>
             <span style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800] }}>Total</span>
             <span style={{ textAlign: "center", fontWeight: 700, fontSize: "14px", color: T.orange[500] }}>{totalMen}</span>
@@ -3732,8 +3856,9 @@ function DailyView({ state, dispatch }) {
     { key: "laborers", label: "Laborers" }, { key: "carpenters", label: "Carpenters" },
     { key: "cementMasons", label: "Cement Masons" },
   ];
-  const totalMen = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.men || 0), 0);
-  const totalHours = workforceRoles.reduce((sum, r) => sum + ((report.workforce[r.key]?.men || 0) * (report.workforce[r.key]?.hours || 0)), 0);
+  const customRoles = report.customRoles || [];
+  const totalMen = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.men || 0), 0) + customRoles.reduce((sum, r) => sum + (r.men || 0), 0);
+  const totalHours = workforceRoles.reduce((sum, r) => sum + ((report.workforce[r.key]?.men || 0) * (report.workforce[r.key]?.hours || 0)), 0) + customRoles.reduce((sum, r) => sum + ((r.men || 0) * (r.hours || 0)), 0);
 
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
@@ -3795,6 +3920,18 @@ function DailyView({ state, dispatch }) {
                 return (
                   <tr key={r.key} style={{ borderBottom: `1px solid ${T.neutral[100]}` }}>
                     <td style={{ padding: "7px 12px" }}>{r.label}</td>
+                    <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{men || "—"}</td>
+                    <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{men ? hrs : "—"}</td>
+                    <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600, color: men > 0 ? T.navy[800] : T.neutral[300] }}>{men ? (men * hrs) : "—"}</td>
+                  </tr>
+                );
+              })}
+              {customRoles.map(cr => {
+                const men = cr.men || 0;
+                const hrs = cr.hours || 0;
+                return (
+                  <tr key={cr.id} style={{ borderBottom: `1px solid ${T.neutral[100]}` }}>
+                    <td style={{ padding: "7px 12px", fontStyle: "italic" }}>{cr.label}</td>
                     <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{men || "—"}</td>
                     <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600 }}>{men ? hrs : "—"}</td>
                     <td style={{ padding: "7px 12px", textAlign: "center", fontWeight: 600, color: men > 0 ? T.navy[800] : T.neutral[300] }}>{men ? (men * hrs) : "—"}</td>
@@ -4373,7 +4510,9 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
   const totalDays = projectDailies.length;
   const totalWorkforceHours = projectDailies.reduce((sum, r) => {
     const roleKeys = ["indirectLabor", "apprentices", "foreman", "operators", "laborers", "carpenters", "cementMasons"];
-    return sum + roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
+    const standardHours = roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
+    const customHours = (r.customRoles || []).reduce((s, cr) => s + ((cr.men || 0) * (cr.hours || 0)), 0);
+    return sum + standardHours + customHours;
   }, 0);
   const allTasks = getNormalizedTasks(project);
   const completedTasks = allTasks.filter(t => t.status === "complete").length;
@@ -4700,7 +4839,9 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
             <div style={{ display: "grid", gap: "16px" }}>
               {projectDailies.map(r => {
                 const roleKeys = ["indirectLabor", "apprentices", "foreman", "operators", "laborers", "carpenters", "cementMasons"];
-                const totalHrs = roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
+                const standardHrs = roleKeys.reduce((s, k) => s + ((r.workforce?.[k]?.men || 0) * (r.workforce?.[k]?.hours || 0)), 0);
+                const customHrs = (r.customRoles || []).reduce((s, cr) => s + ((cr.men || 0) * (cr.hours || 0)), 0);
+                const totalHrs = standardHrs + customHrs;
                 return (
                   <div key={r.id} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "20px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
