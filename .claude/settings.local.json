@@ -4,7 +4,29 @@
       "Bash(powershell -Command \"[Convert]::ToBase64String\\([IO.File]::ReadAllBytes\\(''logo-blue.png''\\)\\)\")",
       "Bash(copy \"C:\\\\Users\\\\johna\\\\desktop\\\\blue iron\\\\bic-website\\\\public\\\\images\\\\logo-blue.png\" \"C:\\\\Users\\\\johna\\\\desktop\\\\blue iron\\\\reports\\\\bic-field-reporter\\\\public\\\\logo-blue.png\")",
       "Bash(powershell -Command:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npm run dev:*)",
+      "Bash(timeout:*)",
+      "Bash(ping:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd temperature, rainfall fields; change workforce to hours\n\n- Added temperature field to daily reports \\(e.g. \"72°F\"\\)\n- Added rainfall field in inches \\(adjustable for site conditions\\)\n- Changed workforce tracking from headcount \\(day/night\\) to hours per role\n- Updated edit form, view display, and PDF/CSV exports\n- Added migration script for existing Supabase databases\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nWorkforce: track Men x Hours for total labor hours\n\n- Each role now has Men count and Hours per person\n- Shift Hours auto-populates the hours for all roles\n- Total Hours = sum of \\(men × hours\\) for each role\n- Example: 2 laborers × 8 hours = 16 total hours\n- Updated edit form, view display, PDF and CSV exports\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(dir:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx supabase:*)",
+      "Bash(curl:*)",
+      "Bash(node:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm install:*)",
+      "Bash(wc:*)",
+      "Bash(npx next lint:*)",
+      "Bash(npx eslint:*)"
     ]
   }
 }
