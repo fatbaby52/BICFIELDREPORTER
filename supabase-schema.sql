@@ -10,12 +10,16 @@ CREATE TABLE projects (
   job_name TEXT NOT NULL,
   client TEXT DEFAULT '',
   prepared_by TEXT DEFAULT '',
+  logo_url TEXT DEFAULT NULL,
   milestones JSONB DEFAULT '[]'::jsonb,
   equipment_owned JSONB DEFAULT '[]'::jsonb,
   equipment_rented JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration: Add logo_url to existing projects table
+-- ALTER TABLE projects ADD COLUMN IF NOT EXISTS logo_url TEXT DEFAULT NULL;
 
 -- Daily reports table
 CREATE TABLE daily_reports (

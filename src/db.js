@@ -7,6 +7,7 @@ const toDbProject = (p) => ({
   job_name: p.jobName,
   client: p.client || '',
   prepared_by: p.preparedBy || '',
+  logo_url: p.logoUrl || null,
   milestones: p.tasks || p.milestones || [],
   equipment_owned: p.equipmentOwned || [],
   equipment_rented: p.equipmentRented || [],
@@ -18,6 +19,7 @@ const fromDbProject = (row) => ({
   jobName: row.job_name || '',
   client: row.client || '',
   preparedBy: row.prepared_by || '',
+  logoUrl: row.logo_url || null,
   tasks: row.milestones || [],
   equipmentOwned: row.equipment_owned || [],
   equipmentRented: row.equipment_rented || [],
@@ -271,4 +273,47 @@ export async function deletePhoto(path) {
   if (!supabase || !path) return
   const { error } = await supabase.storage.from('project-photos').remove([path])
   if (error) console.error('deletePhoto error:', error)
+}
+
+// ─── Project Logo Storage ─────────────────────────────────────
+
+export async function uploadProjectLogo(projectId, file) {
+  if (!supabase || !navigator.onLine) {
+    // Offline: return base64 for now, will sync later
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve({ url: e.target.result, path: null })
+      reader.readAsDataURL(file)
+    })
+  }
+  const ext = file.name?.split('.').pop() || 'png'
+  const path = `logos/${projectId}/logo-${Date.now()}.${ext}`
+  const { error } = await supabase.storage.from('project-photos').upload(path, file)
+  if (error) {
+    console.error('uploadProjectLogo error:', error)
+    // Fall back to base64
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve({ url: e.target.result, path: null })
+      reader.readAsDataURL(file)
+    })
+  }
+  const { data: { publicUrl } } = supabase.storage.from('project-photos').getPublicUrl(path)
+  return { url: publicUrl, path }
+}
+
+export async function deleteProjectLogo(logoUrl) {
+  if (!supabase || !logoUrl) return
+  // Extract path from URL - logos are stored in project-photos bucket
+  try {
+    const url = new URL(logoUrl)
+    const pathMatch = url.pathname.match(/\/project-photos\/(.+)$/)
+    if (pathMatch) {
+      const path = decodeURIComponent(pathMatch[1])
+      const { error } = await supabase.storage.from('project-photos').remove([path])
+      if (error) console.error('deleteProjectLogo error:', error)
+    }
+  } catch (e) {
+    console.error('deleteProjectLogo: invalid URL', e)
+  }
 }

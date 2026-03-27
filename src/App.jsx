@@ -1,6 +1,6 @@
 import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } from "react";
 import * as lucide from "lucide-react";
-import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url } from './db';
+import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url, uploadProjectLogo, deleteProjectLogo } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 import SafetyMeetings, { SAFETY_TOPICS, CAT_COLORS } from './SafetyMeetings';
 import heic2any from 'heic2any';
@@ -586,8 +586,12 @@ const generateLookAhead = (tasks, weeksAhead = 3) => {
   return { weeks, activeTasks };
 };
 
-// ─── BIC Logo ───────────────────────────────────────────────
+// ─── Logos ───────────────────────────────────────────────────
 const BIC_LOGO = "/logo-blue.png";
+const DEFAULT_LOGO = "/logo-4j.png"; // 4J logo as default when no project logo set
+
+// Get the logo for a project (custom logo or default 4J)
+const getProjectLogo = (project) => project?.logoUrl || DEFAULT_LOGO;
 
 // ─── Export Utilities ────────────────────────────────────────
 
@@ -646,15 +650,36 @@ const exportDailyExcel = (report, project) => {
   downloadFile(csv, `Daily_Report_${report.date}.csv`, "text/csv");
 };
 
-// BIC Logo as inline SVG for PDF exports
-const BIC_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60" style="height:40px">
-  <rect width="200" height="60" rx="4" fill="#ffffff" stroke="#e5e7eb"/>
-  <text x="12" y="42" font-family="Georgia, serif" font-size="36" font-weight="bold" fill="#1a2744">BIC</text>
-  <text x="90" y="38" font-family="Georgia, serif" font-size="16" font-style="italic" fill="#e8853a">the Original.</text>
-  <text x="12" y="54" font-family="system-ui, sans-serif" font-size="8" fill="#6b7280">Blue Iron Corp. | Ca. License #65233</text>
-</svg>`;
+// Convert image URL to base64 for PDF embedding
+const imageToBase64 = async (url) => {
+  try {
+    // For relative URLs, make them absolute
+    const absoluteUrl = url.startsWith('/') ? `${window.location.origin}${url}` : url;
+    const response = await fetch(absoluteUrl);
+    const blob = await response.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.error('Failed to convert image to base64:', e);
+    return null;
+  }
+};
 
-const exportDailyPDF = (report, project, includePhotos = false) => {
+// Generate logo HTML for PDF exports - uses base64 data URL
+const getLogoHtmlWithBase64 = (base64Data, height = 40) => {
+  if (!base64Data) return '';
+  return `<img src="${base64Data}" alt="Company Logo" style="height:${height}px;object-fit:contain;border-radius:4px" />`;
+};
+
+const exportDailyPDF = async (report, project, includePhotos = false) => {
+  // Convert logo to base64 for reliable PDF embedding
+  const logoBase64 = await imageToBase64(getProjectLogo(project));
+  const logoHtml = getLogoHtmlWithBase64(logoBase64, 40);
+
   const allEquip = [...project.equipmentOwned.map(e => ({ ...e, type: "Owned" })), ...project.equipmentRented.map(e => ({ ...e, type: "Rented" }))];
   const present = allEquip.filter(e => report.equipmentPresent.includes(e.id));
   const roles = ["Indirect Labor","Apprentices","Foreman","Operators","Laborers","Carpenters","Cement Masons"];
@@ -743,7 +768,7 @@ const exportDailyPDF = (report, project, includePhotos = false) => {
 <div class="masthead">
   <div class="masthead-content">
     <div>
-      ${BIC_LOGO_SVG}
+      ${logoHtml}
       <h1>${project.jobName}</h1>
       <div class="subtitle">JOB #${project.jobNumber} · ${project.client}</div>
       <div class="report-type">Daily Field Report</div>
@@ -864,15 +889,12 @@ window.onload = async () => {
   URL.revokeObjectURL(url);
 };
 
-const exportWeeklyPDF = (weekly, project) => {
+const exportWeeklyPDF = async (weekly, project) => {
   const fmtD = fmtDateShort;
 
-  // White logo for dark background
-  const BIC_LOGO_WHITE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 50" style="height:36px">
-    <text x="0" y="34" font-family="Georgia, serif" font-size="32" font-weight="bold" fill="#1a2744">BIC</text>
-    <text x="70" y="30" font-family="Georgia, serif" font-size="14" font-style="italic" fill="#e8853a">the Original.</text>
-    <text x="0" y="46" font-family="system-ui, sans-serif" font-size="7" fill="#6b7280">Blue Iron Corp. | Ca. License #65233</text>
-  </svg>`;
+  // Convert logo to base64 for reliable PDF embedding
+  const logoBase64 = await imageToBase64(getProjectLogo(project));
+  const logoHtml = getLogoHtmlWithBase64(logoBase64, 36);
 
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Weekly Report ${weekly.weekEnding}</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -883,7 +905,7 @@ const exportWeeklyPDF = (weekly, project) => {
 
   /* Header */
   .header,.header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:3px solid #e8853a}
-  .header-left{flex:1}
+  .header-left{flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:12px}
   .header-right{text-align:right;background:#fff7ed;padding:20px 24px;border-radius:12px;border:1px solid #e8853a}
   .report-badge{display:inline-block;background:linear-gradient(135deg,#e8853a 0%,#f59e0b 100%);color:#fff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;padding:8px 16px;border-radius:6px;margin-top:16px}
   .week-ending{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px}
@@ -976,7 +998,7 @@ const exportWeeklyPDF = (weekly, project) => {
 
     /* Header — keep dark, preserve flex */
     .header,.header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px!important;margin-bottom:24px!important;border-bottom:3px solid #e8853a!important}
-    .header-left{flex:1!important}
+    .header-left{flex:1!important;display:flex!important;flex-direction:column!important;align-items:flex-start!important;gap:12px!important}
     .header-right{text-align:right;background:#fff7ed!important;padding:16px 20px!important;border-radius:10px;border:1px solid #e8853a!important}
     .week-ending{font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em}
     .week-date{font-size:24px;font-weight:800;color:#1a2744!important}
@@ -1064,7 +1086,7 @@ const exportWeeklyPDF = (weekly, project) => {
     <div class="repeating-header">
       <div class="header-inner">
         <div class="header-left">
-          ${BIC_LOGO_WHITE}
+          ${logoHtml}
           <div class="report-badge">Weekly Progress Report</div>
         </div>
         <div class="header-right">
@@ -1317,6 +1339,7 @@ const newProjectTemplate = () => ({
   jobName: "",
   client: "",
   preparedBy: "",
+  logoUrl: null, // Project-specific logo URL (uses 4J default if null)
   tasks: [],
   equipmentOwned: [],
   equipmentRented: [],
@@ -1490,7 +1513,7 @@ function Sidebar({ currentView, dispatch, projects, activeProjectId }) {
     }}>
       <div style={{ borderBottom: `1px solid ${T.neutral[200]}`, background: T.neutral[50], margin: "-24px 0 0 0", padding: "16px 20px 16px", borderRadius: `${T.radius.lg} 0 0 0` }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-          <img src={BIC_LOGO} alt="BIC the Original" style={{ height: "36px", borderRadius: T.radius.sm, flexShrink: 0 }} />
+          <img src={getProjectLogo(activeProject)} alt="Company Logo" style={{ height: "36px", borderRadius: T.radius.sm, flexShrink: 0, objectFit: "contain" }} />
           <div style={{ fontSize: "10px", fontWeight: 700, color: T.navy[700], textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>Field Reporter</div>
         </div>
       </div>
@@ -1644,7 +1667,7 @@ function MobileNav({ currentView, dispatch, projects, activeProjectId }) {
           {drawerOpen ? <X size={24} /> : <Menu size={24} />}
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <img src={BIC_LOGO} alt="BIC" style={{ height: "28px", borderRadius: "4px" }} />
+          <img src={getProjectLogo(activeProject)} alt="Company Logo" style={{ height: "28px", borderRadius: "4px", objectFit: "contain" }} />
           <span style={{ fontSize: "11px", fontWeight: 700, color: T.neutral[200], textTransform: "uppercase", letterSpacing: "0.08em" }}>Field Reporter</span>
         </div>
         <div style={{ width: "40px" }} />
@@ -1673,7 +1696,7 @@ function MobileNav({ currentView, dispatch, projects, activeProjectId }) {
         {/* Drawer header */}
         <div style={{ padding: "16px 20px", borderBottom: `1px solid ${T.navy[700]}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <img src={BIC_LOGO} alt="BIC" style={{ height: "32px", borderRadius: "4px" }} />
+            <img src={getProjectLogo(activeProject)} alt="Company Logo" style={{ height: "32px", borderRadius: "4px", objectFit: "contain" }} />
             <span style={{ fontSize: "11px", fontWeight: 700, color: T.neutral[200], textTransform: "uppercase", letterSpacing: "0.08em" }}>Field Reporter</span>
           </div>
           <button onClick={() => { setDrawerOpen(false); setProjDropOpen(false); }}
@@ -2768,6 +2791,95 @@ function TaskEditor({ tasks, dispatch, dailyReports = [], projectId }) {
   );
 }
 
+// ─── Project Logo Upload Component ───────────────────────────
+function ProjectLogoUpload({ project, dispatch }) {
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+  const currentLogo = getProjectLogo(project);
+  const hasCustomLogo = !!project.logoUrl;
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    try {
+      // Delete old logo if exists
+      if (project.logoUrl) {
+        await deleteProjectLogo(project.logoUrl);
+      }
+
+      const { url } = await uploadProjectLogo(project.id, file);
+      dispatch({ type: "SET_PROJECT", data: { logoUrl: url } });
+    } catch (err) {
+      console.error('Logo upload error:', err);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const handleRemove = async () => {
+    if (!project.logoUrl) return;
+    try {
+      await deleteProjectLogo(project.logoUrl);
+      dispatch({ type: "SET_PROJECT", data: { logoUrl: null } });
+    } catch (err) {
+      console.error('Logo remove error:', err);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+      <div style={{
+        width: "120px", height: "60px", borderRadius: T.radius.md,
+        border: `2px dashed ${T.neutral[300]}`, background: T.neutral[50],
+        display: "flex", alignItems: "center", justifyContent: "center",
+        overflow: "hidden",
+      }}>
+        <img
+          src={currentLogo}
+          alt="Project logo"
+          style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+        />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/svg+xml,image/webp"
+          onChange={handleUpload}
+          style={{ display: "none" }}
+          id="logo-upload"
+        />
+        <Btn
+          icon={uploading ? Loader2 : Upload}
+          size="sm"
+          onClick={() => fileRef.current?.click()}
+          disabled={uploading}
+        >
+          {uploading ? "Uploading..." : "Upload Logo"}
+        </Btn>
+        {hasCustomLogo && (
+          <Btn
+            icon={Trash2}
+            size="sm"
+            variant="secondary"
+            onClick={handleRemove}
+          >
+            Use Default
+          </Btn>
+        )}
+      </div>
+      {hasCustomLogo && (
+        <div style={{ fontSize: "11px", color: T.green[600], display: "flex", alignItems: "center", gap: "4px" }}>
+          <Check size={14} /> Custom logo set
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Project Setup Component ─────────────────────────────────
 function ProjectSetup({ state, dispatch }) {
   const project = getActiveProject(state);
@@ -2786,6 +2898,14 @@ function ProjectSetup({ state, dispatch }) {
           <Input label="Client" value={project.client} onChange={e => dispatch({ type: "SET_PROJECT", data: { client: e.target.value } })} />
           <Input label="Default Report Author" value={project.preparedBy || ""} onChange={e => dispatch({ type: "SET_PROJECT", data: { preparedBy: e.target.value } })} />
         </div>
+      </Card>
+
+      <Card style={{ marginBottom: "20px" }}>
+        <SectionTitle icon={Image}>Project Logo</SectionTitle>
+        <p style={{ fontSize: "12px", color: T.neutral[500], marginBottom: "16px" }}>
+          Upload a custom logo for this project. This will appear on reports and the dashboard. Default is 4J logo.
+        </p>
+        <ProjectLogoUpload project={project} dispatch={dispatch} />
       </Card>
 
       <Card style={{ marginBottom: "20px" }}>
