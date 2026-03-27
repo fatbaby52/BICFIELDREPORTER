@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
-    "heic2any": "^0.0.4",
+    "heic-to": "^1.4.2",
     "html2canvas": "^1.4.1",
     "lucide-react": "^0.263.1",
     "react": "^18.2.0",

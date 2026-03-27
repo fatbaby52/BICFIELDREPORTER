@@ -3,7 +3,7 @@ import * as lucide from "lucide-react";
 import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url, uploadProjectLogo, deleteProjectLogo } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 import SafetyMeetings, { SAFETY_TOPICS, CAT_COLORS } from './SafetyMeetings';
-import heic2any from 'heic2any';
+import { heicTo } from 'heic-to';
 
 const {
   LayoutDashboard, FolderCog, ClipboardEdit, FileText, CalendarRange,
@@ -3216,11 +3216,10 @@ function DailyEntry({ state, dispatch }) {
     return name.endsWith(".heic") || name.endsWith(".heif") || type === "image/heic" || type === "image/heif";
   };
 
-  // Convert HEIC to JPEG blob using heic2any
+  // Convert HEIC to JPEG blob using heic-to
   const convertHeicToJpeg = async (file) => {
-    const blob = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.85 });
-    // heic2any can return a single blob or an array; handle both
-    return Array.isArray(blob) ? blob[0] : blob;
+    const blob = await heicTo({ blob: file, type: "image/jpeg", quality: 0.85 });
+    return blob;
   };
 
   // Resize & compress an image file using canvas — returns a much smaller JPEG data URL
