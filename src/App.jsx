@@ -2675,6 +2675,41 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
     return days.findIndex(d => d.date === task.milestoneTargetDate);
   };
 
+  // Get delay bar positions (returns array of { startIdx, span, reason })
+  const getDelayBars = (task) => {
+    if (!task.delays || task.delays.length === 0) return [];
+    return task.delays.map(delay => {
+      if (!delay.startDate) return null;
+      const endDate = delay.endDate || refDate; // ongoing delays extend to today
+      const startIdx = days.findIndex(d => d.date >= delay.startDate);
+      let endIdx = days.findIndex(d => d.date > endDate);
+      if (endIdx === -1) endIdx = days.length;
+      if (startIdx === -1 || startIdx >= days.length) return null;
+      return {
+        startIdx: startIdx >= 0 ? startIdx : 0,
+        span: Math.max(1, endIdx - (startIdx >= 0 ? startIdx : 0)),
+        reason: delay.reason || "Delay",
+        isOngoing: !delay.endDate,
+      };
+    }).filter(Boolean);
+  };
+
+  // Check if a day index is within any delay bar
+  const isInDelayBar = (delayBars, dayIdx) => {
+    for (const bar of delayBars) {
+      if (dayIdx >= bar.startIdx && dayIdx < bar.startIdx + bar.span) {
+        return {
+          inBar: true,
+          isStart: dayIdx === bar.startIdx,
+          isEnd: dayIdx === bar.startIdx + bar.span - 1,
+          reason: bar.reason,
+          isOngoing: bar.isOngoing,
+        };
+      }
+    }
+    return { inBar: false };
+  };
+
   if (days.length === 0 || visibleTasks.length === 0) {
     return (
       <div style={{ padding: "20px", textAlign: "center", color: T.neutral[400], fontSize: "13px" }}>
@@ -2708,6 +2743,10 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <div style={{ width: "24px", height: "6px", background: "#22c55e", borderRadius: "2px" }} />
           <span style={{ color: T.neutral[500] }}>Actual (Complete)</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <div style={{ width: "24px", height: "6px", background: "#ef4444", borderRadius: "2px" }} />
+          <span style={{ color: T.neutral[500] }}>Delay Period</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <div style={{ width: "10px", height: "10px", background: "#d97706", borderRadius: "50%", border: "2px solid #fbbf24" }} />
@@ -2755,6 +2794,7 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
               const oldDone = isOldComplete(task);
               const projBar = oldDone ? null : getProjectedBar(task);
               const actBar = oldDone ? null : getActualBar(task);
+              const delayBars = oldDone ? [] : getDelayBars(task);
               const milestoneIdx = getMilestoneMarkerIdx(task);
               const delayDays = calculateDelayDays(task);
               const hasDelay = delayDays > 0 || task.delayReason || (task.delays && task.delays.length > 0);
@@ -2785,6 +2825,9 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
                     const isProjStart = projBar && dayIdx === projBar.startIdx;
                     const isProjEnd = projBar && dayIdx === projBar.startIdx + projBar.span - 1;
 
+                    // Delay bar (middle, red solid)
+                    const delayInfo = isInDelayBar(delayBars, dayIdx);
+
                     // Actual bar (bottom, colored solid)
                     const isActBar = !oldDone && actBar && dayIdx >= actBar.startIdx && dayIdx < actBar.startIdx + actBar.span;
                     const isActStart = actBar && dayIdx === actBar.startIdx;
@@ -2796,12 +2839,12 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
                     return (
                       <td key={dayIdx} style={{
                         padding: "2px 1px",
-                        background: d.isToday ? "rgba(232,133,58,0.06)" : "transparent",
+                        background: d.isToday ? "rgba(232,133,58,0.06)" : delayInfo.inBar ? "rgba(239,68,68,0.06)" : "transparent",
                         borderLeft: d.dayName === "Mon" ? `2px solid ${T.neutral[200]}` : `1px solid ${T.neutral[100]}`,
                         position: "relative",
                         verticalAlign: "middle",
                       }}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "2px", height: "28px", justifyContent: "center" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "1px", height: "32px", justifyContent: "center" }}>
                           {/* Projected bar (top) */}
                           {isProjBar && (
                             <div style={{
@@ -2817,10 +2860,23 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
                           )}
                           {!isProjBar && <div style={{ height: "6px" }} />}
 
+                          {/* Delay bar (middle, red) */}
+                          {delayInfo.inBar && (
+                            <div style={{
+                              height: "7px",
+                              background: delayInfo.isOngoing ? "repeating-linear-gradient(45deg, #ef4444, #ef4444 3px, #fca5a5 3px, #fca5a5 6px)" : "#ef4444",
+                              opacity: 0.9,
+                              borderRadius: `${delayInfo.isStart ? "3px" : "0"} ${delayInfo.isEnd ? "3px" : "0"} ${delayInfo.isEnd ? "3px" : "0"} ${delayInfo.isStart ? "3px" : "0"}`,
+                              marginLeft: delayInfo.isStart ? "2px" : "0",
+                              marginRight: delayInfo.isEnd ? "2px" : "0",
+                            }} title={`Delay: ${delayInfo.reason}${delayInfo.isOngoing ? " (ongoing)" : ""}`} />
+                          )}
+                          {!delayInfo.inBar && <div style={{ height: "7px" }} />}
+
                           {/* Actual bar (bottom) */}
                           {isActBar && (
                             <div style={{
-                              height: "8px",
+                              height: "7px",
                               background: getActualBarColor(task),
                               opacity: 0.9,
                               borderRadius: `${isActStart ? "3px" : "0"} ${isActEnd ? "3px" : "0"} ${isActEnd ? "3px" : "0"} ${isActStart ? "3px" : "0"}`,
@@ -2828,7 +2884,7 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
                               marginRight: isActEnd ? "2px" : "0",
                             }} title={`Actual: ${task.status}`} />
                           )}
-                          {!isActBar && <div style={{ height: "8px" }} />}
+                          {!isActBar && <div style={{ height: "7px" }} />}
                         </div>
 
                         {/* Milestone marker (gold diamond) */}
