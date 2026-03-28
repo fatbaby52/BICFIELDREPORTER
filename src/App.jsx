@@ -500,8 +500,26 @@ const workDaysBetween = (startDate, endDate) => {
   return count;
 };
 
-// Calculate delay days for a task
-const calculateDelayDays = (task) => {
+// Calculate total logged delay days from delays array
+const calculateLoggedDelayDays = (task) => {
+  if (!task.delays || task.delays.length === 0) return 0;
+  let total = 0;
+  task.delays.forEach(delay => {
+    if (delay.startDate && delay.endDate) {
+      total += workDaysBetween(delay.startDate, delay.endDate) + 1; // inclusive
+    } else if (delay.startDate) {
+      // Ongoing delay - count from start to today
+      const today = toISODate(new Date());
+      if (delay.startDate <= today) {
+        total += workDaysBetween(delay.startDate, today) + 1;
+      }
+    }
+  });
+  return total;
+};
+
+// Calculate schedule delay days for a task (how far behind projected end)
+const calculateScheduleDelayDays = (task) => {
   if (task.status === "complete") return 0;
   if (!task.projectedStartDate || !task.projectedDuration) return 0;
 
@@ -512,6 +530,13 @@ const calculateDelayDays = (task) => {
     return workDaysBetween(projectedEnd, today);
   }
   return 0;
+};
+
+// Calculate total delay days (max of schedule delay or logged delays)
+const calculateDelayDays = (task) => {
+  const scheduleDelay = calculateScheduleDelayDays(task);
+  const loggedDelay = calculateLoggedDelayDays(task);
+  return Math.max(scheduleDelay, loggedDelay);
 };
 
 // Get week start (Monday) for a given date
@@ -544,7 +569,9 @@ const normalizeTask = (t, index = 0) => ({
   isMilestone: t.isMilestone !== undefined ? t.isMilestone : false,
   milestoneTargetDate: t.milestoneTargetDate || "",
 
-  // Delays (migrate old isDelay flag)
+  // Delays - array of { id, startDate, endDate, reason }
+  delays: t.delays || [],
+  // Legacy single delay reason (for backward compat)
   delayReason: t.delayReason || (t.isDelay ? "Delay" : ""),
 
   // Legacy fields for backward compat reading (remove after full migration)
@@ -1300,7 +1327,7 @@ ${(() => {
     ${ganttTasks.map(task => {
       const oldDone = isOldComplete(task);
       const bar = oldDone ? null : getBar(task);
-      const hasDelay = !!task.delayReason || calculateDelayDays(task) > 0;
+      const hasDelay = !!task.delayReason || (task.delays && task.delays.length > 0) || calculateDelayDays(task) > 0;
       const color = hasDelay ? '#ef4444' : task.status === 'in_progress' ? '#3b82f6' : task.status === 'complete' ? '#22c55e' : '#1a2744';
       const nameColor = oldDone ? '#22c55e' : hasDelay ? '#ef4444' : task.isMilestone ? '#d97706' : '#1a2744';
       const nameExtra = oldDone ? 'border:2px solid #22c55e;border-radius:4px;' : '';
@@ -2730,7 +2757,7 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
               const actBar = oldDone ? null : getActualBar(task);
               const milestoneIdx = getMilestoneMarkerIdx(task);
               const delayDays = calculateDelayDays(task);
-              const hasDelay = delayDays > 0 || task.delayReason;
+              const hasDelay = delayDays > 0 || task.delayReason || (task.delays && task.delays.length > 0);
 
               return (
                 <tr key={task.id} style={{ borderBottom: `1px solid ${T.neutral[100]}` }}>
@@ -2925,7 +2952,7 @@ function TaskEditor({ tasks, dispatch, dailyReports = [], projectId }) {
         const projDuration = t.projectedDuration || 0;
         const isOver = actualHours > projDuration && projDuration > 0;
         const delayDays = calculateDelayDays(t);
-        const hasDelay = delayDays > 0 || t.delayReason;
+        const hasDelay = delayDays > 0 || t.delayReason || (t.delays && t.delays.length > 0);
 
         // Combine auto dates (from daily reports) with manual dates
         const autoDates = getAutoDatesWorked(t.id);
@@ -3076,18 +3103,84 @@ function TaskEditor({ tasks, dispatch, dailyReports = [], projectId }) {
               </div>
             )}
 
-            {/* Row 6: Delay reason (shown if there's a delay or overdue) */}
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", paddingLeft: "24px", flexWrap: "wrap" }}>
-              <span style={{ fontSize: "10px", fontWeight: 600, color: hasDelay ? T.red[500] : T.neutral[400], textTransform: "uppercase", letterSpacing: "0.04em", minWidth: "60px" }}>Delay</span>
-              <input value={t.delayReason || ""} onChange={e => dispatch({ type: "UPDATE_TASK", id: t.id, data: { delayReason: e.target.value } })}
-                placeholder="Reason for delay (optional)..."
-                style={{ flex: 1, maxWidth: "300px", padding: "4px 8px", border: `1px solid ${hasDelay ? T.red[200] : T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "11px", outline: "none", background: hasDelay ? "rgba(239,68,68,0.05)" : T.white }}
-              />
-              {delayDays > 0 && (
-                <span style={{ padding: "2px 8px", borderRadius: "10px", fontSize: "10px", fontWeight: 600, background: T.red[100], color: T.red[700] }}>
-                  {delayDays} day{delayDays !== 1 ? "s" : ""} behind
-                </span>
+            {/* Row 6: Delays section */}
+            <div style={{ paddingLeft: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "6px" }}>
+                <span style={{ fontSize: "10px", fontWeight: 600, color: hasDelay ? T.red[500] : T.neutral[400], textTransform: "uppercase", letterSpacing: "0.04em", minWidth: "60px" }}>Delays</span>
+                <button
+                  onClick={() => {
+                    const newDelay = { id: `delay-${Date.now()}`, startDate: toISODate(new Date()), endDate: "", reason: "" };
+                    dispatch({ type: "UPDATE_TASK", id: t.id, data: { delays: [...(t.delays || []), newDelay] } });
+                  }}
+                  style={{ display: "flex", alignItems: "center", gap: "4px", background: "none", border: `1px dashed ${T.red[300]}`, borderRadius: "10px", padding: "2px 8px", fontSize: "10px", color: T.red[500], cursor: "pointer" }}
+                >
+                  + Add Delay
+                </button>
+                {delayDays > 0 && (
+                  <span style={{ padding: "2px 8px", borderRadius: "10px", fontSize: "10px", fontWeight: 600, background: T.red[100], color: T.red[700] }}>
+                    {delayDays} day{delayDays !== 1 ? "s" : ""} behind
+                  </span>
+                )}
+              </div>
+              {/* Legacy delay reason (if exists and no new delays) */}
+              {t.delayReason && (!t.delays || t.delays.length === 0) && (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", marginLeft: "72px" }}>
+                  <span style={{ fontSize: "10px", color: T.red[500], fontStyle: "italic" }}>Legacy note: {t.delayReason}</span>
+                  <button onClick={() => dispatch({ type: "UPDATE_TASK", id: t.id, data: { delayReason: "" } })} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "10px", color: T.neutral[400] }}>×</button>
+                </div>
               )}
+              {/* List of delays */}
+              {(t.delays || []).map((delay, delayIdx) => {
+                const delayLoggedDays = delay.startDate && delay.endDate
+                  ? workDaysBetween(delay.startDate, delay.endDate) + 1
+                  : delay.startDate
+                    ? workDaysBetween(delay.startDate, toISODate(new Date())) + 1
+                    : 0;
+                return (
+                  <div key={delay.id} style={{
+                    display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", marginLeft: "72px",
+                    padding: "6px 10px", background: "rgba(239,68,68,0.04)", borderRadius: T.radius.sm, border: `1px solid ${T.red[200]}`, flexWrap: "wrap"
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                      <span style={{ fontSize: "10px", color: T.red[500] }}>Start:</span>
+                      <input type="date" value={delay.startDate || ""} onChange={e => {
+                        const updated = [...(t.delays || [])];
+                        updated[delayIdx] = { ...delay, startDate: e.target.value };
+                        dispatch({ type: "UPDATE_TASK", id: t.id, data: { delays: updated } });
+                      }} style={{ padding: "2px 4px", border: `1px solid ${T.red[200]}`, borderRadius: T.radius.sm, fontSize: "10px", background: T.white }} />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                      <span style={{ fontSize: "10px", color: T.red[500] }}>End:</span>
+                      <input type="date" value={delay.endDate || ""} onChange={e => {
+                        const updated = [...(t.delays || [])];
+                        updated[delayIdx] = { ...delay, endDate: e.target.value };
+                        dispatch({ type: "UPDATE_TASK", id: t.id, data: { delays: updated } });
+                      }} style={{ padding: "2px 4px", border: `1px solid ${T.red[200]}`, borderRadius: T.radius.sm, fontSize: "10px", background: T.white }} placeholder="Ongoing" />
+                    </div>
+                    <input
+                      value={delay.reason || ""} placeholder="Reason (optional)..."
+                      onChange={e => {
+                        const updated = [...(t.delays || [])];
+                        updated[delayIdx] = { ...delay, reason: e.target.value };
+                        dispatch({ type: "UPDATE_TASK", id: t.id, data: { delays: updated } });
+                      }}
+                      style={{ flex: 1, minWidth: "120px", maxWidth: "200px", padding: "3px 6px", border: `1px solid ${T.red[200]}`, borderRadius: T.radius.sm, fontSize: "10px", background: T.white }}
+                    />
+                    {delayLoggedDays > 0 && (
+                      <span style={{ fontSize: "9px", color: T.red[600], fontWeight: 600 }}>{delayLoggedDays}d</span>
+                    )}
+                    <button onClick={() => {
+                      const updated = (t.delays || []).filter((_, i) => i !== delayIdx);
+                      dispatch({ type: "UPDATE_TASK", id: t.id, data: { delays: updated } });
+                    }} style={{ background: "none", border: "none", cursor: "pointer", padding: "2px", color: T.red[400] }}
+                      onMouseEnter={e => { e.currentTarget.style.color = T.red[600]; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = T.red[400]; }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         );
@@ -3305,7 +3398,7 @@ function TaskHoursEntry({ tasks, taskHours, reportDate, dispatch }) {
       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
         {activeTasks.map(t => {
           const hours = getHoursForTask(t.id);
-          const hasDelay = t.delayReason || calculateDelayDays(t) > 0;
+          const hasDelay = t.delayReason || (t.delays && t.delays.length > 0) || calculateDelayDays(t) > 0;
           return (
             <div key={t.id} style={{ display: "flex", alignItems: "center", gap: "12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1 }}>
@@ -4043,7 +4136,7 @@ function DailyEntry({ state, dispatch }) {
                 dispatch({ type: "UPDATE_TASK", id: t.id, data: { status: "not_started", actualCompletionDate: "" } });
               }
             };
-            const hasDelay = t.delayReason || calculateDelayDays(t) > 0;
+            const hasDelay = t.delayReason || (t.delays && t.delays.length > 0) || calculateDelayDays(t) > 0;
             const delayDays = calculateDelayDays(t);
             return (
               <button key={t.id} onClick={cycleStatus}
@@ -4423,7 +4516,7 @@ function DailyView({ state, dispatch }) {
                 complete: { bg: T.green[100], text: T.green[600], label: "Complete" },
               };
               const statusStyle = statusColors[status];
-              const hasDelay = t.delayReason || calculateDelayDays(t) > 0;
+              const hasDelay = t.delayReason || (t.delays && t.delays.length > 0) || calculateDelayDays(t) > 0;
               const delayDays = calculateDelayDays(t);
               return (
                 <div key={t.id} style={{
@@ -5140,7 +5233,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                         const actualDate = t.actualCompletionDate ? new Date(t.actualCompletionDate) : null;
                         const isLate = isComplete && actualDate && targetDate && actualDate > targetDate;
                         const isPastDue = !isComplete && !isInProgress && targetDate && targetDate < new Date();
-                        const hasDelay = t.delayReason || calculateDelayDays(t) > 0;
+                        const hasDelay = t.delayReason || (t.delays && t.delays.length > 0) || calculateDelayDays(t) > 0;
                         const delayDays = calculateDelayDays(t);
                         return (
                           <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
@@ -5183,7 +5276,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
                       const actualDate = t.actualCompletionDate ? new Date(t.actualCompletionDate) : null;
                       const isLate = isComplete && actualDate && targetDate && actualDate > targetDate;
                       const isPastDue = !isComplete && !isInProgress && targetDate && targetDate < new Date();
-                      const hasDelay = t.delayReason || calculateDelayDays(t) > 0;
+                      const hasDelay = t.delayReason || (t.delays && t.delays.length > 0) || calculateDelayDays(t) > 0;
                       const statusBg = isComplete ? (isLate ? "rgba(251,191,36,0.2)" : "rgba(74,222,128,0.2)") : isInProgress ? "rgba(251,191,36,0.2)" : isPastDue ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.1)";
                       const statusColor = isComplete ? (isLate ? "#fbbf24" : "#4ade80") : isInProgress ? "#fbbf24" : isPastDue ? "#ef4444" : T.navy[400];
                       const statusText = isComplete ? (isLate ? "Completed Late" : "Complete") : isInProgress ? "In Progress" : isPastDue ? "Past Due" : "Not Started";
