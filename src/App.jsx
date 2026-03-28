@@ -2608,10 +2608,13 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
     }
     currentWeek.days++;
   });
-  weeks.forEach((w, i) => {
-    if (i === 0) w.label = "Last Week";
-    else if (i === 1) w.label = "This Week";
-    else w.label = `Week ${i}`;
+  weeks.forEach((w) => {
+    // Format as "Week of M/D/YY"
+    const weekDate = parseLocalDate(w.start);
+    const month = weekDate.getMonth() + 1;
+    const day = weekDate.getDate();
+    const year = String(weekDate.getFullYear()).slice(-2);
+    w.label = `Week of ${month}/${day}/${year}`;
   });
 
   // Show all tasks
@@ -2633,12 +2636,29 @@ function ThreeWeekLookAhead({ tasks, referenceDate, onTaskUpdate, interactive = 
     if (!startDate || duration < 1) return null;
     const endDate = addWorkDays(startDate, duration);
 
-    const startIdx = days.findIndex(d => d.date >= startDate);
-    const endIdx = days.findIndex(d => d.date >= endDate);
+    // Find where start and end fall in the visible days
+    let startIdx = days.findIndex(d => d.date >= startDate);
+    let endIdx = days.findIndex(d => d.date >= endDate);
+
+    // If start is beyond the chart (all days are before startDate), don't show
+    if (startIdx === -1 && days.length > 0 && days[days.length - 1].date < startDate) {
+      return null;
+    }
+
+    // If start is before the chart, clamp to 0
+    if (startIdx === -1) startIdx = 0;
+
+    // If end is beyond the chart, extend to end of chart
+    if (endIdx === -1) endIdx = days.length;
+
+    // If end is before start (bar entirely before chart), don't show
+    if (endIdx <= startIdx && endDate < days[0]?.date) {
+      return null;
+    }
 
     return {
-      startIdx: startIdx >= 0 ? startIdx : 0,
-      span: Math.max(1, (endIdx >= 0 ? endIdx : days.length) - (startIdx >= 0 ? startIdx : 0)),
+      startIdx,
+      span: Math.max(1, endIdx - startIdx),
     };
   };
 
