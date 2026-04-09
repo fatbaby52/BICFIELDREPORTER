@@ -98,6 +98,8 @@ const toDbWeekly = (w) => ({
   additional_delays: w.additionalDelays || '',
   next_oac_meeting: w.nextOACMeeting || '',
   selected_photos: stripPhotoData(w.selectedPhotos),
+  schedule_file_url: w.scheduleFileUrl || null,
+  schedule_file_type: w.scheduleFileType || null,
 })
 
 const fromDbWeekly = (row) => ({
@@ -117,6 +119,55 @@ const fromDbWeekly = (row) => ({
   additionalDelays: row.additional_delays || '',
   nextOACMeeting: row.next_oac_meeting || '',
   selectedPhotos: row.selected_photos || [],
+  scheduleFileUrl: row.schedule_file_url || null,
+  scheduleFileType: row.schedule_file_type || null,
+})
+
+// ─── Custom Reports ───────────────────────────────────────────
+const toDbCustom = (r) => ({
+  id: r.id,
+  project_id: r.projectId,
+  report_name: r.reportName,
+  start_date: r.startDate,
+  end_date: r.endDate,
+  ongoing_completed: r.ongoingCompleted || [],
+  look_ahead: r.lookAhead || [],
+  outstanding_rfis: r.outstandingRFIs || '',
+  hot_submittals: r.hotSubmittals || '',
+  safety: r.safety || 'No incidents',
+  important_dates: r.importantDates || '',
+  owner_delivery_dates: r.ownerDeliveryDates || '',
+  outstanding_owner_items: r.outstandingOwnerItems || '',
+  upcoming_inspections: r.upcomingInspections || '',
+  hindrances: r.hindrances || '',
+  additional_delays: r.additionalDelays || '',
+  next_oac_meeting: r.nextOACMeeting || '',
+  selected_photos: stripPhotoData(r.selectedPhotos),
+  schedule_file_url: r.scheduleFileUrl || null,
+  schedule_file_type: r.scheduleFileType || null,
+})
+
+const fromDbCustom = (row) => ({
+  id: row.id,
+  projectId: row.project_id,
+  reportName: row.report_name || '',
+  startDate: row.start_date,
+  endDate: row.end_date,
+  ongoingCompleted: row.ongoing_completed || [],
+  lookAhead: row.look_ahead || [],
+  outstandingRFIs: row.outstanding_rfis || '',
+  hotSubmittals: row.hot_submittals || '',
+  safety: row.safety || 'No incidents',
+  importantDates: row.important_dates || '',
+  ownerDeliveryDates: row.owner_delivery_dates || '',
+  outstandingOwnerItems: row.outstanding_owner_items || '',
+  upcomingInspections: row.upcoming_inspections || '',
+  hindrances: row.hindrances || '',
+  additionalDelays: row.additional_delays || '',
+  nextOACMeeting: row.next_oac_meeting || '',
+  selectedPhotos: row.selected_photos || [],
+  scheduleFileUrl: row.schedule_file_url || null,
+  scheduleFileType: row.schedule_file_type || null,
 })
 
 // ─── Projects ────────────────────────────────────────────────
@@ -177,6 +228,26 @@ export async function deleteWeeklyReport(id) {
   if (!supabase) return
   const { error } = await supabase.from('weekly_reports').delete().eq('id', id)
   if (error) console.error('deleteWeeklyReport error:', error)
+}
+
+// ─── Custom Reports ──────────────────────────────────────────
+export async function loadCustomReports() {
+  if (!supabase) return []
+  const { data, error } = await supabase.from('custom_reports').select('*').order('created_at', { ascending: false })
+  if (error) { console.error('loadCustomReports error:', error); return [] }
+  return data.map(fromDbCustom)
+}
+
+export async function saveCustomReport(report) {
+  if (!supabase) return
+  const { error } = await supabase.from('custom_reports').upsert(toDbCustom(report))
+  if (error) console.error('saveCustomReport error:', error)
+}
+
+export async function deleteCustomReport(id) {
+  if (!supabase) return
+  const { error } = await supabase.from('custom_reports').delete().eq('id', id)
+  if (error) console.error('deleteCustomReport error:', error)
 }
 
 // ─── Photo Storage ───────────────────────────────────────────

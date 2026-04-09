@@ -1,6 +1,6 @@
 import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } from "react";
 import * as lucide from "lucide-react";
-import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url, uploadProjectLogo, deleteProjectLogo } from './db';
+import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, loadCustomReports, saveCustomReport, deleteCustomReport, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url, uploadProjectLogo, deleteProjectLogo } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 import SafetyMeetings, { SAFETY_TOPICS, CAT_COLORS } from './SafetyMeetings';
 import { heicTo } from 'heic-to';
@@ -1275,6 +1275,37 @@ ${(weekly.selectedPhotos || []).filter(p => p.selected !== false).length > 0 ? `
 </div>` : ""}
 
 ${(() => {
+  // If user uploaded a schedule file, show that instead of Gantt chart
+  if (weekly.scheduleFileUrl) {
+    const isImage = weekly.scheduleFileType && weekly.scheduleFileType.startsWith('image/');
+    const isPdf = weekly.scheduleFileType === 'application/pdf';
+    const headerHtml = '<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">' +
+      '<div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>' +
+      '<h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">Schedule Look-Ahead</h2>' +
+      '</div>';
+
+    if (isImage) {
+      return headerHtml +
+        '<img src="' + weekly.scheduleFileUrl + '" alt="Schedule" style="width:100%;max-width:100%;height:auto;border-radius:8px;border:1px solid #e5e7eb" />' +
+        '</div>';
+    } else if (isPdf) {
+      return headerHtml +
+        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
+        '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached (PDF)</p>' +
+        '<a href="' + weekly.scheduleFileUrl + '" target="_blank" style="color:#e8853a;font-weight:600;text-decoration:underline">View Schedule PDF</a>' +
+        '</div></div>';
+    } else {
+      // Excel or other file
+      return headerHtml +
+        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
+        '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached</p>' +
+        '<a href="' + weekly.scheduleFileUrl + '" target="_blank" style="color:#e8853a;font-weight:600;text-decoration:underline">Download Schedule File</a>' +
+        '</div></div>';
+    }
+  }
+
+  // Otherwise, show native Gantt chart
   const ganttTasks = getNormalizedTasks(project);
   if (ganttTasks.length === 0) return "";
   const refDate = weekly.weekEnding || toISODate(new Date());
@@ -1293,13 +1324,422 @@ ${(() => {
   }
   const firstDay = gDays.length > 0 ? gDays[0].date : lookbackStr;
   const gWeeks = [];
+  var cw = null;
+  gDays.forEach(function(d, idx) {
+    const ws = getWeekStart(d.date);
+    if (!cw || cw.start !== ws) { cw = { start: ws, days: 0 }; gWeeks.push(cw); }
+    cw.days++;
+  });
+  gWeeks.forEach(function(w, i) { w.label = i === 0 ? "Last Week" : i === 1 ? "This Week" : "Week " + i; });
+  const isOldComplete = function(task) {
+    if (task.status !== "complete") return false;
+    const cd = task.actualCompletionDate || task.targetDate;
+    if (!cd) return true;
+    return cd < firstDay;
+  };
+  const getBar = function(task) {
+    const sd = task.targetDate || refDate;
+    const dur = task.expectedDuration || 1;
+    const ed = addWorkDays(sd, dur);
+    const si = gDays.findIndex(function(d) { return d.date >= sd; });
+    const ei = gDays.findIndex(function(d) { return d.date >= ed; });
+    return { si: si >= 0 ? si : 0, span: Math.max(1, (ei >= 0 ? ei : gDays.length) - (si >= 0 ? si : 0)) };
+  };
+
+  // Build Gantt HTML using string concatenation
+  var ganttHtml = '<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">' +
+    '<div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>' +
+    '<h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">3-Week Schedule Look-Ahead</h2>' +
+    '</div>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed">' +
+    '<colgroup><col style="width:160px"/>' + gDays.map(function() { return '<col style="width:auto"/>'; }).join('') + '</colgroup>' +
+    '<tr><th style="padding:6px 8px;background:#1a2744;color:#fff;font-size:9px;text-align:left;font-weight:700">Task</th>' +
+    gWeeks.map(function(w) { return '<th colspan="' + w.days + '" style="padding:4px;background:#1a2744;color:#fff;font-size:9px;text-align:center;border-left:1px solid #2d3a54">' + w.label + '</th>'; }).join('') + '</tr>' +
+    '<tr><th style="padding:3px 8px;background:#f3f4f6;font-size:8px;color:#6b7280;text-align:left;border-bottom:2px solid #e5e7eb"></th>' +
+    gDays.map(function(d) { return '<th style="padding:2px;background:' + (d.isToday ? '#fff7ed' : '#f3f4f6') + ';font-size:8px;color:' + (d.isToday ? '#e8853a' : '#9ca3af') + ';text-align:center;border-left:' + (d.isMon ? '2px solid #d1d5db' : '1px solid #e5e7eb') + ';border-bottom:2px solid ' + (d.isToday ? '#e8853a' : '#e5e7eb') + ';font-weight:' + (d.isToday ? '700' : '400') + '">' + d.label + '</th>'; }).join('') + '</tr>' +
+    ganttTasks.map(function(task) {
+      var oldDone = isOldComplete(task);
+      var bar = oldDone ? null : getBar(task);
+      var hasDelay = !!task.delayReason || (task.delays && task.delays.length > 0) || calculateDelayDays(task) > 0;
+      var color = hasDelay ? '#ef4444' : task.status === 'in_progress' ? '#3b82f6' : task.status === 'complete' ? '#22c55e' : '#1a2744';
+      var nameColor = oldDone ? '#22c55e' : hasDelay ? '#ef4444' : task.isMilestone ? '#d97706' : '#1a2744';
+      var nameExtra = oldDone ? 'border:2px solid #22c55e;border-radius:4px;' : '';
+      var delayDays = calculateDelayDays(task);
+      var delayBadge = delayDays > 0 ? ' <span style="background:#fecaca;color:#991b1b;padding:1px 4px;border-radius:6px;font-size:8px;font-weight:600">' + delayDays + 'd</span>' : '';
+      var cells = oldDone
+        ? gDays.map(function(d) { return '<td style="padding:3px 1px;background:' + (d.isToday ? 'rgba(232,133,58,0.04)' : 'transparent') + ';border-left:' + (d.isMon ? '2px solid #e5e7eb' : '1px solid #f3f4f6') + '"></td>'; }).join('')
+        : gDays.map(function(d, di) {
+          var isBar = di >= bar.si && di < bar.si + bar.span;
+          var isS = di === bar.si;
+          var isE = di === bar.si + bar.span - 1;
+          var inner = isBar ? '<div style="height:12px;background:' + color + ';opacity:0.85;border-radius:' + (isS ? '3px' : '0') + ' ' + (isE ? '3px' : '0') + ' ' + (isE ? '3px' : '0') + ' ' + (isS ? '3px' : '0') + ';margin:0 ' + (isE ? '1px' : '0') + ' 0 ' + (isS ? '1px' : '0') + '"></div>' : '';
+          return '<td style="padding:3px 1px;background:' + (d.isToday ? 'rgba(232,133,58,0.04)' : 'transparent') + ';border-left:' + (d.isMon ? '2px solid #e5e7eb' : '1px solid #f3f4f6') + '">' + inner + '</td>';
+        }).join('');
+      return '<tr style="border-bottom:1px solid #f3f4f6"><td style="padding:5px 8px;font-size:10px;font-weight:500;color:' + nameColor + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid #e5e7eb;' + nameExtra + '">' + (task.isMilestone ? '<span style="color:#d97706">◆</span> ' : '') + task.description + delayBadge + '</td>' + cells + '</tr>';
+    }).join('') +
+    '</table>' +
+    '<div style="margin-top:8px;font-size:9px;color:#6b7280;display:flex;gap:16px">' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#1a2744;border-radius:2px;margin-right:4px"></span>Scheduled</span>' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#3b82f6;border-radius:2px;margin-right:4px"></span>In Progress</span>' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#ef4444;border-radius:2px;margin-right:4px"></span>Delayed</span>' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Complete</span>' +
+    '<span><span style="display:inline-block;width:8px;height:8px;background:#d97706;border-radius:50%;margin-right:4px"></span>Milestone</span>' +
+    '</div></div>';
+  return ganttHtml;
+})()}
+
+<script>window.onload=()=>window.print()</script></body></html>`;
+
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if (!win) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Weekly_Report_${weekly.weekEnding}.html`;
+    link.click();
+  }
+  URL.revokeObjectURL(url);
+};
+
+// Export Custom Report PDF (similar to weekly but with custom name and date range)
+const exportCustomPDF = async (custom, project) => {
+  const fmtD = fmtDateShort;
+  const logoBase64 = await imageToBase64(getProjectLogo(project));
+  const logoHtml = getLogoHtmlWithBase64(logoBase64, 36);
+
+  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${custom.reportName}</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:#ffffff;min-height:100vh;color:#1a2744}
+  .page{max-width:1100px;width:100%;margin:0 auto;padding:32px}
+  .header,.header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:3px solid #e8853a}
+  .header-left{flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+  .header-right{text-align:right;background:#fff7ed;padding:20px 24px;border-radius:12px;border:1px solid #e8853a}
+  .report-badge{display:inline-block;background:linear-gradient(135deg,#e8853a 0%,#f59e0b 100%);color:#fff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;padding:8px 16px;border-radius:6px;margin-top:16px}
+  .date-range-label{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px}
+  .date-range{font-size:18px;font-weight:800;color:#1a2744;letter-spacing:-0.02em}
+  .project-title{text-align:center;margin-bottom:28px}
+  .project-title h1{font-size:28px;font-weight:800;color:#1a2744;margin-bottom:8px;letter-spacing:-0.02em}
+  .project-title .subtitle{font-size:14px;color:#6b7280}
+  .panel{background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:20px 24px;color:#1a2744;font-size:12px}
+  .panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e5e7eb;display:flex;align-items:center;gap:10px}
+  .panel-title.orange{color:#e8853a}
+  .panel-title.orange::before{content:'';width:4px;height:14px;background:#e8853a;border-radius:2px}
+  .panel-title.white{color:#1a2744}
+  .panel-title.white::before{content:'';width:4px;height:14px;background:#1a2744;border-radius:2px;opacity:0.3}
+  .panel ul{list-style:none;padding:0}
+  .panel li{padding:8px 0;border-bottom:1px solid #f3f4f6;display:flex;align-items:flex-start;gap:10px}
+  .panel li:last-child{border-bottom:none}
+  .panel li::before{content:'→';color:#e8853a;font-weight:bold;flex-shrink:0}
+  .panel li span{color:#374151}
+  .panel li span.complete{color:#4ade80}
+  .panel .content{color:#374151;line-height:1.7}
+  .panel .content:empty::before{content:'—';color:#9ca3af}
+  .green{color:#4ade80} .red{color:#ef4444} .orange{color:#e8853a}
+  .main-grid{display:grid;grid-template-columns:1.5fr 1fr;gap:20px;margin-bottom:20px}
+  .side-stack{display:flex;flex-direction:column;gap:16px}
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .milestone-section{margin-top:20px}
+  .milestone-table{width:100%;border-collapse:separate;border-spacing:0;font-size:11px;margin-top:12px;border-radius:8px;overflow:hidden}
+  .milestone-table th{background:#f3f4f6;color:#1a2744;padding:12px 16px;text-align:left;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px;border-bottom:2px solid #e5e7eb}
+  .milestone-table td{padding:12px 16px;border-bottom:1px solid #f3f4f6;color:#374151}
+  .milestone-table tr:last-child td{border-bottom:none}
+  .milestone-table .complete{color:#4ade80;font-weight:600}
+  .milestone-table .in-progress{color:#fbbf24;font-weight:600}
+  .milestone-table .pending{color:#94a3b8}
+  .info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}
+  .info-box{background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px}
+  .info-box-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#6b7280;margin-bottom:8px}
+  .info-box-content{font-size:12px;color:#1a2744;line-height:1.6}
+  .info-box-content:empty::before{content:'—';color:#9ca3af}
+  .info-box.highlight{border-color:#e8853a;background:#fff7ed}
+  .info-box.highlight .info-box-title{color:#e8853a}
+  .footer{text-align:center;margin-top:32px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.1)}
+  .footer-text{font-size:11px;color:#6b7280}
+  .photo-page{background:#fff;min-height:100vh}
+  .photo-page .page{padding:24px 32px}
+  .photo-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a}
+  .photo-header h2{font-size:18px;font-weight:800;color:#1a2744}
+  .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .photo-card{border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);border:1px solid #e5e7eb}
+  .photo-card img{width:100%;height:140px;object-fit:cover;display:block}
+  .photo-card-info{padding:5px 8px;background:#fff}
+  .photo-card-desc{font-size:11px;color:#1a2744;font-weight:600;margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .photo-card-date{font-size:10px;color:#6b7280}
+  .report-wrapper{display:table;width:100%}
+  .repeating-header{display:table-header-group}
+  .repeating-header .header-inner{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:24px;border-bottom:3px solid #e8853a}
+  .report-body{display:table-row-group}
+  .page-break{page-break-before:always}
+  @media print{
+    *,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
+    *{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+    html,body{margin:0!important;padding:0!important}
+    body{background:#ffffff!important}
+    .page{padding:24px!important;max-width:1100px;margin:0 auto}
+    .header,.header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px!important;margin-bottom:24px!important;border-bottom:3px solid #e8853a!important}
+    .header-left{flex:1!important;display:flex!important;flex-direction:column!important;align-items:flex-start!important;gap:12px!important}
+    .header-right{text-align:right;background:#fff7ed!important;padding:16px 20px!important;border-radius:10px;border:1px solid #e8853a!important}
+    .date-range-label{font-size:10px;color:#8899b4;text-transform:uppercase;letter-spacing:0.1em}
+    .date-range{font-size:16px;font-weight:800;color:#1a2744!important}
+    .report-badge{display:inline-block!important;background:#e8853a!important;color:#fff!important;padding:6px 14px!important;border-radius:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-top:12px}
+    .project-title{text-align:center;margin:24px 0}
+    .project-title h1{font-size:26px;font-weight:800;color:#1a2744!important;margin-bottom:6px}
+    .project-title .subtitle{color:#6b7280!important;font-size:14px}
+    .main-grid{display:grid!important;grid-template-columns:1.5fr 1fr!important;gap:20px!important;margin-bottom:20px}
+    .side-stack{display:flex!important;flex-direction:column!important;gap:16px!important}
+    .two-col{display:grid!important;grid-template-columns:1fr 1fr!important;gap:16px!important}
+    .panel{background:#ffffff!important;border:1px solid #e5e7eb!important;border-radius:12px;padding:20px 24px!important;color:#1a2744!important;font-size:12px;page-break-inside:avoid;margin-bottom:12px}
+    .panel-title{color:#e8853a!important;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid rgba(255,255,255,0.1)!important;display:flex!important;align-items:center!important;gap:10px!important}
+    .panel-title.orange{color:#e8853a!important}
+    .panel-title.white{color:#1a2744!important}
+    .panel-title::before{content:''!important;display:inline-block!important;width:4px!important;height:14px!important;background:#e8853a!important;border-radius:2px!important;flex-shrink:0}
+    .panel ul{display:block!important;list-style:none;padding:0}
+    .panel li{display:flex!important;align-items:flex-start!important;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;color:#374151!important}
+    .panel li:last-child{border-bottom:none}
+    .panel li::before{content:'→'!important;color:#e8853a!important;font-weight:bold;flex-shrink:0}
+    .panel li span{color:#374151!important}
+    .panel li span.complete{color:#4ade80!important}
+    .panel .content{color:#374151!important;line-height:1.7}
+    .panel .content:empty::before{content:'—';color:#4b5563}
+    .info-row{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:16px!important;margin-top:20px}
+    .info-box{background:#f9fafb!important;border:1px solid #e5e7eb!important;border-radius:10px;padding:16px 20px!important;color:#1a2744!important}
+    .info-box-title{color:#6b7280!important;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px}
+    .info-box-content{color:#1a2744!important;font-size:12px;line-height:1.6}
+    .info-box-content:empty::before{content:'—';color:#9ca3af}
+    .info-box.highlight{border-color:#e8853a!important;background:#fff7ed!important}
+    .info-box.highlight .info-box-title{color:#e8853a!important}
+    table{display:table!important;width:100%;border-collapse:separate;border-spacing:0}
+    tr{display:table-row!important}
+    th,td{display:table-cell!important}
+    .milestone-table{width:100%;font-size:11px;margin-top:12px;border-radius:8px;overflow:hidden}
+    .milestone-table th{background:#f3f4f6!important;color:#1a2744!important;padding:12px 16px;text-align:left;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;font-size:10px;border-bottom:2px solid #e5e7eb!important}
+    .milestone-table td{padding:12px 16px;border-bottom:1px solid #f3f4f6!important;color:#374151!important}
+    .milestone-table tr:last-child td{border-bottom:none}
+    .milestone-table .complete{color:#4ade80!important;font-weight:600}
+    .milestone-table .in-progress{color:#fbbf24!important;font-weight:600}
+    .milestone-table .pending{color:#94a3b8!important}
+    .green{color:#4ade80!important}
+    .red{color:#ef4444!important}
+    .orange{color:#e8853a!important}
+    .photo-page{background:#fff!important}
+    .photo-page .page{padding:20px 28px!important}
+    .photo-header{margin-bottom:12px!important;padding-bottom:8px!important}
+    .photo-header h2{font-size:16px!important}
+    .photo-grid{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+    .photo-card{border:1px solid #e5e7eb!important;border-radius:6px;overflow:hidden;page-break-inside:avoid}
+    .photo-card img{display:block!important;width:100%!important;height:130px!important;object-fit:cover!important}
+    .photo-card-info{padding:4px 8px!important;background:#fff!important;color:#1a2744!important}
+    .photo-card-desc{font-size:10px!important;color:#1a2744!important;font-weight:600;margin-bottom:1px}
+    .photo-card-date{font-size:9px!important;color:#6b7280!important}
+    .footer{text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;color:#6b7280!important;font-size:11px}
+    .report-wrapper{display:table!important;width:100%!important}
+    .repeating-header{display:table-header-group!important}
+    .repeating-header .header-inner{display:flex!important;justify-content:space-between!important;align-items:flex-start!important;padding:20px 0!important;margin-bottom:20px!important;border-bottom:3px solid #e8853a!important}
+    .report-body{display:table-row-group!important}
+    .page-break{page-break-before:always}
+  }
+</style></head><body>
+<div class="page">
+  <div class="report-wrapper">
+    <div class="repeating-header">
+      <div class="header-inner">
+        <div class="header-left">
+          ${logoHtml}
+          <div class="report-badge">${custom.reportName}</div>
+        </div>
+        <div class="header-right">
+          <div class="date-range-label">Date Range</div>
+          <div class="date-range">${fmtD(custom.startDate)} – ${fmtD(custom.endDate)}</div>
+        </div>
+      </div>
+    </div>
+    <div class="report-body">
+
+  <div class="project-title">
+    <h1>${project.jobName}</h1>
+    <div class="subtitle">JOB #${project.jobNumber} · ${project.client}</div>
+  </div>
+
+  <div class="main-grid">
+    <div>
+      <div class="panel">
+        <div class="panel-title orange">On-going / Completed Work</div>
+        <ul>${(custom.ongoingCompleted||[]).filter(Boolean).map(i => `<li><span${i.includes('[COMPLETED]') ? ' class="complete"' : ''}>${i}</span></li>`).join("") || '<li><span>No items</span></li>'}</ul>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <div class="panel-title white">Look Ahead Schedule</div>
+        <ul>${(custom.lookAhead||[]).filter(Boolean).map(i => `<li><span>${i}</span></li>`).join("") || '<li><span>No items scheduled</span></li>'}</ul>
+      </div>
+    </div>
+    <div class="side-stack">
+      <div class="panel">
+        <div class="panel-title white">Outstanding RFI's</div>
+        <div class="content">${custom.outstandingRFIs || ""}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title white">Hot Submittals</div>
+        <div class="content">${custom.hotSubmittals || ""}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title white">Safety</div>
+        <div class="content">${custom.safety || "No incidents reported"}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-grid">
+    <div class="panel milestone-section">
+      <div class="panel-title white">Milestone Tracking</div>
+      <table class="milestone-table">
+        <tr><th scope="col">Description</th><th scope="col">Target</th><th scope="col">Status</th></tr>
+        ${getNormalizedTasks(project).filter(t => t.isMilestone).map(t => {
+          const statusLabel = t.status === "complete" ? "Complete" : t.status === "in_progress" ? "In Progress" : "Not Started";
+          const statusClass = t.status === "complete" ? "complete" : t.status === "in_progress" ? "in-progress" : "pending";
+          return `<tr><td class="${statusClass}">${t.description}</td><td>${fmtD(t.targetDate)}</td><td class="${statusClass}">${statusLabel}</td></tr>`;
+        }).join("") || '<tr><td colspan="3" style="text-align:center;color:#6b7280">No milestones defined</td></tr>'}
+      </table>
+    </div>
+    <div class="side-stack">
+      <div class="panel">
+        <div class="panel-title white">Important Dates</div>
+        <div class="content">${custom.importantDates || ""}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title white">Owner Delivery Dates</div>
+        <div class="content">${custom.ownerDeliveryDates || ""}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title white">Outstanding Items – Owner</div>
+        <div class="content">${custom.outstandingOwnerItems || ""}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-row">
+    <div class="info-box">
+      <div class="info-box-title">Upcoming Inspections</div>
+      <div class="info-box-content">${custom.upcomingInspections || ""}</div>
+    </div>
+    <div class="info-box${custom.hindrances ? ' highlight' : ''}">
+      <div class="info-box-title">Hindrances</div>
+      <div class="info-box-content">${custom.hindrances || ""}${custom.additionalDelays ? `<div style="margin-top:8px;color:#ef4444;font-weight:600">${custom.additionalDelays}</div>` : ""}</div>
+    </div>
+    <div class="info-box highlight">
+      <div class="info-box-title">Next OAC Meeting</div>
+      <div class="info-box-content" style="font-size:16px;font-weight:700">${fmtD(custom.nextOACMeeting) || "TBD"}</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="footer-text">Generated ${new Date().toLocaleDateString()} · Blue Iron Corporation</div>
+  </div>
+
+    </div><!-- end report-body -->
+  </div><!-- end report-wrapper -->
+</div>
+
+${(custom.selectedPhotos || []).filter(p => p.selected !== false).length > 0 ? `
+<div class="photo-page page-break">
+  <div class="page">
+    <div class="photo-header">
+      <div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>
+      <h2>Progress Photos</h2>
+    </div>
+    <div class="photo-grid">
+      ${(custom.selectedPhotos||[]).filter(p => p.selected !== false).map(p => `
+        <div class="photo-card">
+          <img src="${p.url}" alt="${p.description}">
+          <div class="photo-card-info">
+            <div class="photo-card-desc">${p.description}</div>
+            <div class="photo-card-date">${fmtDateShort(p.date)}</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  </div>
+</div>` : ""}
+
+${(() => {
+  // If user uploaded a schedule file, show that instead of Gantt chart
+  if (custom.scheduleFileUrl) {
+    const isImage = custom.scheduleFileType && custom.scheduleFileType.startsWith('image/');
+    const isPdf = custom.scheduleFileType === 'application/pdf';
+    const headerHtml = '<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">' +
+      '<div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>' +
+      '<h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">Schedule Look-Ahead</h2>' +
+      '</div>';
+
+    if (isImage) {
+      return headerHtml +
+        '<img src="' + custom.scheduleFileUrl + '" alt="Schedule" style="width:100%;max-width:100%;height:auto;border-radius:8px;border:1px solid #e5e7eb" />' +
+        '</div>';
+    } else if (isPdf) {
+      return headerHtml +
+        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
+        '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached (PDF)</p>' +
+        '<a href="' + custom.scheduleFileUrl + '" target="_blank" style="color:#e8853a;font-weight:600;text-decoration:underline">View Schedule PDF</a>' +
+        '</div></div>';
+    } else {
+      // Excel or other file
+      return headerHtml +
+        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
+        '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached</p>' +
+        '<a href="' + custom.scheduleFileUrl + '" target="_blank" style="color:#e8853a;font-weight:600;text-decoration:underline">Download Schedule File</a>' +
+        '</div></div>';
+    }
+  }
+
+  // Otherwise, show native Gantt chart
+  const ganttTasks = getNormalizedTasks(project);
+  if (ganttTasks.length === 0) return "";
+
+  // Use end date of custom report as reference, look back 1 week, forward 3 weeks
+  const refDate = custom.endDate || toISODate(new Date());
+  const refDt = parseLocalDate(refDate);
+
+  // Look back 1 week from end date
+  const lookbackDt = new Date(refDt);
+  lookbackDt.setDate(lookbackDt.getDate() - 7);
+  const lookbackStr = toISODate(lookbackDt);
+
+  // Generate 4 weeks of work days (1 back + 3 forward = ~28 calendar days)
+  const gDays = [];
+  const gDt = parseLocalDate(lookbackStr);
+  for (let i = 0; i < 28; i++) {
+    const gd = toISODate(gDt);
+    if (isWorkDay(gd)) {
+      gDays.push({ date: gd, label: gDt.getDate().toString(), isToday: gd === refDate, isMon: gDt.getDay() === 1 });
+    }
+    gDt.setDate(gDt.getDate() + 1);
+  }
+
+  const firstDay = gDays.length > 0 ? gDays[0].date : lookbackStr;
+  const gWeeks = [];
   let cw = null;
   gDays.forEach((d, idx) => {
     const ws = getWeekStart(d.date);
     if (!cw || cw.start !== ws) { cw = { start: ws, days: 0 }; gWeeks.push(cw); }
     cw.days++;
   });
-  gWeeks.forEach((w, i) => { w.label = i === 0 ? "Last Week" : i === 1 ? "This Week" : "Week " + i; });
+
+  // Label weeks relative to end date
+  const refWeekStart = getWeekStart(refDate);
+  gWeeks.forEach((w, i) => {
+    if (w.start < refWeekStart) {
+      w.label = "Prior Week";
+    } else if (w.start === refWeekStart) {
+      w.label = "Report Week";
+    } else {
+      const weeksAhead = Math.floor((parseLocalDate(w.start) - parseLocalDate(refWeekStart)) / (7 * 24 * 60 * 60 * 1000));
+      w.label = "Week +" + weeksAhead;
+    }
+  });
+
   const isOldComplete = (task) => {
     if (task.status !== "complete") return false;
     const cd = task.actualCompletionDate || task.targetDate;
@@ -1314,45 +1754,48 @@ ${(() => {
     const ei = gDays.findIndex(d => d.date >= ed);
     return { si: si >= 0 ? si : 0, span: Math.max(1, (ei >= 0 ? ei : gDays.length) - (si >= 0 ? si : 0)) };
   };
-  return `
-<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">
-    <div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>
-    <h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">3-Week Schedule Look-Ahead</h2>
-  </div>
-  <table style="width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed">
-    <colgroup><col style="width:160px"/>${gDays.map(() => '<col style="width:auto"/>').join("")}</colgroup>
-    <tr>${['<th style="padding:6px 8px;background:#1a2744;color:#fff;font-size:9px;text-align:left;font-weight:700">Task</th>'].concat(gWeeks.map(w => `<th colspan="${w.days}" style="padding:4px;background:#1a2744;color:#fff;font-size:9px;text-align:center;border-left:1px solid #2d3a54">${w.label}</th>`)).join("")}</tr>
-    <tr>${['<th style="padding:3px 8px;background:#f3f4f6;font-size:8px;color:#6b7280;text-align:left;border-bottom:2px solid #e5e7eb"></th>'].concat(gDays.map(d => `<th style="padding:2px;background:${d.isToday ? '#fff7ed' : '#f3f4f6'};font-size:8px;color:${d.isToday ? '#e8853a' : '#9ca3af'};text-align:center;border-left:${d.isMon ? '2px solid #d1d5db' : '1px solid #e5e7eb'};border-bottom:2px solid ${d.isToday ? '#e8853a' : '#e5e7eb'};font-weight:${d.isToday ? '700' : '400'}">${d.label}</th>`)).join("")}</tr>
-    ${ganttTasks.map(task => {
-      const oldDone = isOldComplete(task);
-      const bar = oldDone ? null : getBar(task);
-      const hasDelay = !!task.delayReason || (task.delays && task.delays.length > 0) || calculateDelayDays(task) > 0;
-      const color = hasDelay ? '#ef4444' : task.status === 'in_progress' ? '#3b82f6' : task.status === 'complete' ? '#22c55e' : '#1a2744';
-      const nameColor = oldDone ? '#22c55e' : hasDelay ? '#ef4444' : task.isMilestone ? '#d97706' : '#1a2744';
-      const nameExtra = oldDone ? 'border:2px solid #22c55e;border-radius:4px;' : '';
-      const delayDays = calculateDelayDays(task);
-      const delayBadge = delayDays > 0 ? ' <span style="background:#fecaca;color:#991b1b;padding:1px 4px;border-radius:6px;font-size:8px;font-weight:600">' + delayDays + 'd</span>' : '';
-      const cells = oldDone
-        ? gDays.map(function(d) { return '<td style="padding:3px 1px;background:' + (d.isToday ? 'rgba(232,133,58,0.04)' : 'transparent') + ';border-left:' + (d.isMon ? '2px solid #e5e7eb' : '1px solid #f3f4f6') + '"></td>'; }).join("")
+
+  // Build Gantt HTML using string concatenation
+  var ganttHtml = '<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">' +
+    '<div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>' +
+    '<h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">3-Week Schedule Look-Ahead</h2>' +
+    '</div>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed">' +
+    '<colgroup><col style="width:160px"/>' + gDays.map(function() { return '<col style="width:auto"/>'; }).join('') + '</colgroup>' +
+    '<tr><th style="padding:6px 8px;background:#1a2744;color:#fff;font-size:9px;text-align:left;font-weight:700">Task</th>' +
+    gWeeks.map(function(w) { return '<th colspan="' + w.days + '" style="padding:4px;background:#1a2744;color:#fff;font-size:9px;text-align:center;border-left:1px solid #2d3a54">' + w.label + '</th>'; }).join('') + '</tr>' +
+    '<tr><th style="padding:3px 8px;background:#f3f4f6;font-size:8px;color:#6b7280;text-align:left;border-bottom:2px solid #e5e7eb"></th>' +
+    gDays.map(function(d) { return '<th style="padding:2px;background:' + (d.isToday ? '#fff7ed' : '#f3f4f6') + ';font-size:8px;color:' + (d.isToday ? '#e8853a' : '#9ca3af') + ';text-align:center;border-left:' + (d.isMon ? '2px solid #d1d5db' : '1px solid #e5e7eb') + ';border-bottom:2px solid ' + (d.isToday ? '#e8853a' : '#e5e7eb') + ';font-weight:' + (d.isToday ? '700' : '400') + '">' + d.label + '</th>'; }).join('') + '</tr>' +
+    ganttTasks.map(function(task) {
+      var oldDone = isOldComplete(task);
+      var bar = oldDone ? null : getBar(task);
+      var hasDelay = !!task.delayReason || (task.delays && task.delays.length > 0) || calculateDelayDays(task) > 0;
+      var color = hasDelay ? '#ef4444' : task.status === 'in_progress' ? '#3b82f6' : task.status === 'complete' ? '#22c55e' : '#1a2744';
+      var nameColor = oldDone ? '#22c55e' : hasDelay ? '#ef4444' : task.isMilestone ? '#d97706' : '#1a2744';
+      var nameExtra = oldDone ? 'border:2px solid #22c55e;border-radius:4px;' : '';
+      var delayDays = calculateDelayDays(task);
+      var delayBadge = delayDays > 0 ? ' <span style="background:#fecaca;color:#991b1b;padding:1px 4px;border-radius:6px;font-size:8px;font-weight:600">' + delayDays + 'd</span>' : '';
+      var cells = oldDone
+        ? gDays.map(function(d) { return '<td style="padding:3px 1px;background:' + (d.isToday ? 'rgba(232,133,58,0.04)' : 'transparent') + ';border-left:' + (d.isMon ? '2px solid #e5e7eb' : '1px solid #f3f4f6') + '"></td>'; }).join('')
         : gDays.map(function(d, di) {
           var isBar = di >= bar.si && di < bar.si + bar.span;
           var isS = di === bar.si;
           var isE = di === bar.si + bar.span - 1;
           var inner = isBar ? '<div style="height:12px;background:' + color + ';opacity:0.85;border-radius:' + (isS ? '3px' : '0') + ' ' + (isE ? '3px' : '0') + ' ' + (isE ? '3px' : '0') + ' ' + (isS ? '3px' : '0') + ';margin:0 ' + (isE ? '1px' : '0') + ' 0 ' + (isS ? '1px' : '0') + '"></div>' : '';
           return '<td style="padding:3px 1px;background:' + (d.isToday ? 'rgba(232,133,58,0.04)' : 'transparent') + ';border-left:' + (d.isMon ? '2px solid #e5e7eb' : '1px solid #f3f4f6') + '">' + inner + '</td>';
-        }).join("");
+        }).join('');
       return '<tr style="border-bottom:1px solid #f3f4f6"><td style="padding:5px 8px;font-size:10px;font-weight:500;color:' + nameColor + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid #e5e7eb;' + nameExtra + '">' + (task.isMilestone ? '<span style="color:#d97706">◆</span> ' : '') + task.description + delayBadge + '</td>' + cells + '</tr>';
-    }).join("")}
-  </table>
-  <div style="margin-top:8px;font-size:9px;color:#6b7280;display:flex;gap:16px">
-    <span><span style="display:inline-block;width:10px;height:6px;background:#1a2744;border-radius:2px;margin-right:4px"></span>Scheduled</span>
-    <span><span style="display:inline-block;width:10px;height:6px;background:#3b82f6;border-radius:2px;margin-right:4px"></span>In Progress</span>
-    <span><span style="display:inline-block;width:10px;height:6px;background:#ef4444;border-radius:2px;margin-right:4px"></span>Delayed</span>
-    <span><span style="display:inline-block;width:10px;height:6px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Complete</span>
-    <span><span style="display:inline-block;width:8px;height:8px;background:#d97706;border-radius:50%;margin-right:4px"></span>Milestone</span>
-  </div>
-</div>`;
+    }).join('') +
+    '</table>' +
+    '<div style="margin-top:8px;font-size:9px;color:#6b7280;display:flex;gap:16px">' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#1a2744;border-radius:2px;margin-right:4px"></span>Scheduled</span>' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#3b82f6;border-radius:2px;margin-right:4px"></span>In Progress</span>' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#ef4444;border-radius:2px;margin-right:4px"></span>Delayed</span>' +
+    '<span><span style="display:inline-block;width:10px;height:6px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Complete</span>' +
+    '<span><span style="display:inline-block;width:8px;height:8px;background:#d97706;border-radius:50%;margin-right:4px"></span>Milestone</span>' +
+    '</div></div>';
+  return ganttHtml;
 })()}
 
 <script>window.onload=()=>window.print()</script></body></html>`;
@@ -1363,7 +1806,7 @@ ${(() => {
   if (!win) {
     const link = document.createElement("a");
     link.href = url;
-    link.download = `Weekly_Report_${weekly.weekEnding}.html`;
+    link.download = `${custom.reportName.replace(/[^a-z0-9]/gi, '_')}_${custom.startDate}_to_${custom.endDate}.html`;
     link.click();
   }
   URL.revokeObjectURL(url);
@@ -1441,11 +1884,14 @@ const initialState = {
   activeProjectId: null,
   dailyReports: [],
   weeklyReports: [],
+  customReports: [],
   currentView: "projects",
   editingDaily: null,
   viewingDaily: null,
   editingWeekly: null,
   viewingWeekly: null,
+  editingCustom: null,
+  viewingCustom: null,
   loading: true,
 };
 
@@ -1463,6 +1909,7 @@ function reducer(state, action) {
       projects: action.projects,
       dailyReports: action.dailyReports,
       weeklyReports: action.weeklyReports,
+      customReports: action.customReports || [],
       activeProjectId: action.projects.length > 0 ? action.projects[0].id : null,
       currentView: action.projects.length > 0 ? "dashboard" : "projects",
       loading: false,
@@ -1473,7 +1920,7 @@ function reducer(state, action) {
       const np = newProjectTemplate();
       return { ...state, projects: [...state.projects, np], activeProjectId: np.id, currentView: "projectSetup" };
     }
-    case "SELECT_PROJECT": return { ...state, activeProjectId: action.id, currentView: "dashboard", editingDaily: null, viewingDaily: null, editingWeekly: null };
+    case "SELECT_PROJECT": return { ...state, activeProjectId: action.id, currentView: "dashboard", editingDaily: null, viewingDaily: null, editingWeekly: null, editingCustom: null };
     case "DELETE_PROJECT": {
       const remaining = state.projects.filter(p => p.id !== action.id);
       const newActive = remaining.length ? remaining[0].id : null;
@@ -1483,6 +1930,7 @@ function reducer(state, action) {
         activeProjectId: state.activeProjectId === action.id ? newActive : state.activeProjectId,
         dailyReports: state.dailyReports.filter(r => r.projectId !== action.id),
         weeklyReports: state.weeklyReports.filter(r => r.projectId !== action.id),
+        customReports: state.customReports.filter(r => r.projectId !== action.id),
         currentView: remaining.length ? "dashboard" : "projects",
       };
     }
@@ -1587,6 +2035,19 @@ function reducer(state, action) {
     }
     case "UPDATE_EDITING_WEEKLY": return { ...state, editingWeekly: { ...state.editingWeekly, ...action.data } };
     case "DELETE_WEEKLY": return { ...state, weeklyReports: state.weeklyReports.filter(r => r.id !== action.id) };
+    // Custom Reports
+    case "SET_EDITING_CUSTOM": return { ...state, editingCustom: action.data, currentView: "customGen" };
+    case "SAVE_CUSTOM": {
+      const exists = state.customReports.find(r => r.id === state.editingCustom.id);
+      const reports = exists
+        ? state.customReports.map(r => r.id === state.editingCustom.id ? state.editingCustom : r)
+        : [...state.customReports, state.editingCustom];
+      return { ...state, customReports: reports, currentView: "dashboard", editingCustom: null };
+    }
+    case "UPDATE_EDITING_CUSTOM": return { ...state, editingCustom: { ...state.editingCustom, ...action.data } };
+    case "DELETE_CUSTOM": return { ...state, customReports: state.customReports.filter(r => r.id !== action.id) };
+    case "VIEW_CUSTOM": return { ...state, viewingCustom: action.report, currentView: "customView" };
+    case "UPDATE_CUSTOM_PHOTOS": return { ...state, customReports: state.customReports.map(r => r.id === action.reportId ? { ...r, selectedPhotos: action.photos } : r) };
     default: return state;
   }
 }
@@ -2417,6 +2878,23 @@ function Dashboard({ state, dispatch }) {
           </div>
         </div>
 
+        <button onClick={() => dispatch({ type: "SET_EDITING_CUSTOM", data: null })} style={{
+          display: "flex", alignItems: "center", gap: "12px", padding: "16px 20px",
+          background: T.white, border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.lg,
+          cursor: "pointer", transition: "all 0.2s",
+        }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = T.orange[500]; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = T.neutral[200]; }}
+        >
+          <div style={{ width: "40px", height: "40px", borderRadius: T.radius.md, background: T.orange[100], display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <FileText size={20} style={{ color: T.orange[600] }} />
+          </div>
+          <div style={{ textAlign: "left" }}>
+            <div style={{ fontWeight: 700, fontSize: "14px", color: T.navy[800] }}>Custom Report</div>
+            <div style={{ fontSize: "12px", color: T.neutral[500] }}>Any date range, custom name</div>
+          </div>
+        </button>
+
         <button onClick={() => dispatch({ type: "SET_VIEW", view: "photos" })} style={{
           display: "flex", alignItems: "center", gap: "12px", padding: "16px 20px",
           background: T.white, border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.lg,
@@ -2524,6 +3002,45 @@ function Dashboard({ state, dispatch }) {
                       onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
                       onMouseLeave={e => { e.currentTarget.style.color = T.neutral[300]; }}
                       title="Delete weekly report"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                    <ChevronRight size={16} style={{ color: T.neutral[400] }} />
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Saved Custom Reports */}
+      {state.customReports.filter(r => r.projectId === project.id).length > 0 && (
+        <div style={{ marginTop: "32px" }}>
+          <SectionTitle icon={FileText}>Saved Custom Reports</SectionTitle>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {state.customReports.filter(r => r.projectId === project.id).slice().reverse().map(report => (
+              <Card key={report.id} padding="16px 20px" style={{ cursor: "pointer", transition: "all 0.15s" }}
+                onClick={() => dispatch({ type: "VIEW_CUSTOM", report })}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = T.orange[500]; e.currentTarget.style.transform = "translateX(4px)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = T.neutral[200]; e.currentTarget.style.transform = "translateX(0)"; }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <div style={{ width: "36px", height: "36px", borderRadius: T.radius.md, background: T.orange[100], display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <FileText size={18} style={{ color: T.orange[600] }} />
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: "14px", color: T.navy[800] }}>{report.reportName}</div>
+                      <div style={{ fontSize: "12px", color: T.neutral[500] }}>{fmtDateShort(report.startDate)} – {fmtDateShort(report.endDate)}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <button onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${report.reportName}"?`)) dispatch({ type: "DELETE_CUSTOM", id: report.id }); }}
+                      style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[300], padding: "4px", borderRadius: "4px", display: "flex", alignItems: "center", justifyContent: "center" }}
+                      onMouseEnter={e => { e.currentTarget.style.color = T.red[500]; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = T.neutral[300]; }}
+                      title="Delete custom report"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -4866,6 +5383,73 @@ function WeeklyGenerator({ state, dispatch }) {
         </table>
       </Card>
 
+      {/* Schedule Look-Ahead Upload */}
+      <Card style={{ marginBottom: "16px" }}>
+        <SectionTitle icon={Calendar}>Schedule Look-Ahead</SectionTitle>
+        <p style={{ fontSize: "12px", color: T.neutral[500], marginBottom: "12px" }}>
+          By default, a 3-week Gantt chart will be generated from your tasks. You can optionally replace it with an uploaded file.
+        </p>
+
+        {weekly.scheduleFileUrl ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "12px", background: T.neutral[50], borderRadius: T.radius.md }}>
+            {weekly.scheduleFileType?.startsWith('image/') ? (
+              <img src={weekly.scheduleFileUrl} alt="Schedule preview" style={{ width: "120px", height: "80px", objectFit: "cover", borderRadius: T.radius.sm, border: `1px solid ${T.neutral[200]}` }} />
+            ) : (
+              <div style={{ width: "60px", height: "60px", background: T.navy[100], borderRadius: T.radius.sm, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <FileText size={24} style={{ color: T.navy[500] }} />
+              </div>
+            )}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[800] }}>
+                {weekly.scheduleFileType?.startsWith('image/') ? 'Image' : weekly.scheduleFileType === 'application/pdf' ? 'PDF' : 'File'} uploaded
+              </div>
+              <div style={{ fontSize: "11px", color: T.neutral[500] }}>
+                This will replace the generated Gantt chart in the PDF export.
+              </div>
+            </div>
+            <Btn variant="ghost" size="sm" icon={Trash2} onClick={() => update({ scheduleFileUrl: null, scheduleFileType: null })}
+              style={{ color: T.neutral[400] }}
+            >Remove</Btn>
+          </div>
+        ) : (
+          <div style={{ border: `2px dashed ${T.neutral[200]}`, borderRadius: T.radius.md, padding: "24px", textAlign: "center" }}>
+            <Upload size={24} style={{ color: T.neutral[400], marginBottom: "8px" }} />
+            <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>
+              Upload an image, PDF, or Excel file to use instead of the generated Gantt chart
+            </p>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "8px 16px", background: T.navy[800], color: T.white, borderRadius: T.radius.md, fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+              <Upload size={16} />
+              Choose File
+              <input
+                type="file"
+                accept="image/*,.pdf,.xlsx,.xls"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const { uploadPhoto } = await import('./db.js');
+                    const result = await uploadPhoto(file, project.id, weekly.id);
+                    update({ scheduleFileUrl: result.url, scheduleFileType: file.type });
+                  } catch (err) {
+                    console.error('Upload failed:', err);
+                    // Fallback to base64 for offline/error scenarios
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      update({ scheduleFileUrl: ev.target.result, scheduleFileType: file.type });
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+            </label>
+            <p style={{ fontSize: "11px", color: T.neutral[400], marginTop: "8px" }}>
+              Supports: JPG, PNG, PDF, Excel (.xlsx, .xls)
+            </p>
+          </div>
+        )}
+      </Card>
+
       {(weekly.selectedPhotos || []).length > 0 && (
         <Card style={{ marginBottom: "16px" }}>
           <SectionTitle icon={Camera} action={
@@ -4995,6 +5579,423 @@ function WeeklyView({ state, dispatch }) {
           <SectionTitle icon={Camera}>Progress Photos</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "12px" }}>
             {weekly.selectedPhotos.filter(p => p.selected !== false).map((photo, i) => (
+              <div key={photo.id || i} style={{ border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md, overflow: "hidden" }}>
+                {(photo.thumb || photo.url) ? (
+                  <img src={photo.thumb || photo.url} alt={photo.description} style={{ width: "100%", height: "120px", objectFit: "cover" }} />
+                ) : (
+                  <div style={{ height: "120px", background: T.neutral[100], display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Camera size={24} style={{ color: T.neutral[300] }} />
+                  </div>
+                )}
+                <div style={{ padding: "8px", fontSize: "12px", color: T.navy[700] }}>{photo.description}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ─── Custom Report Generator Component ───────────────────────
+function CustomReportGenerator({ state, dispatch }) {
+  const custom = state.editingCustom;
+  const project = getActiveProject(state);
+
+  const [reportName, setReportName] = useState("");
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return toISODate(d);
+  });
+  const [endDate, setEndDate] = useState(() => toISODate(new Date()));
+
+  const projectDailies = state.dailyReports.filter(r => r.projectId === project?.id);
+
+  // Filter dailies in date range
+  const dateRangeReports = projectDailies.filter(r => r.date >= startDate && r.date <= endDate);
+
+  if (!custom) {
+    const generateNew = () => {
+      if (!reportName.trim()) {
+        alert("Please enter a report name");
+        return;
+      }
+      const agg = aggregateWeeklyData(dateRangeReports, project);
+      dispatch({ type: "SET_EDITING_CUSTOM", data: {
+        id: `cr-${Date.now()}`, projectId: project.id,
+        reportName: reportName.trim(),
+        startDate, endDate,
+        ongoingCompleted: agg.ongoingCompleted,
+        lookAhead: [""], outstandingRFIs: "None", hotSubmittals: "",
+        safety: agg.safety,
+        importantDates: "", ownerDeliveryDates: "", outstandingOwnerItems: "",
+        upcomingInspections: "", hindrances: agg.delays, additionalDelays: "",
+        nextOACMeeting: "", selectedPhotos: agg.allPhotos,
+      }});
+    };
+
+    return (
+      <div className="fade-in" style={{ maxWidth: "500px", margin: "60px auto", textAlign: "center" }}>
+        <FileText size={48} style={{ color: T.neutral[300], marginBottom: "16px" }} />
+        <h3 style={{ fontSize: "18px", fontWeight: 700, color: T.navy[800], marginBottom: "8px" }}>Generate Custom Report</h3>
+        <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "20px" }}>Create a report for any date range with a custom name.</p>
+
+        <Input
+          label="Report Name"
+          placeholder="e.g., Monthly Progress Report - March"
+          value={reportName}
+          onChange={e => setReportName(e.target.value)}
+          style={{ marginBottom: "12px", textAlign: "left" }}
+          required
+        />
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+          <Input
+            label="Start Date"
+            type="date"
+            value={startDate}
+            onChange={e => setStartDate(e.target.value)}
+            style={{ textAlign: "left" }}
+          />
+          <Input
+            label="End Date"
+            type="date"
+            value={endDate}
+            onChange={e => setEndDate(e.target.value)}
+            style={{ textAlign: "left" }}
+          />
+        </div>
+
+        <div style={{ background: T.neutral[100], borderRadius: T.radius.md, padding: "12px", marginBottom: "16px", fontSize: "13px", color: T.navy[700] }}>
+          <strong>{dateRangeReports.length}</strong> daily report{dateRangeReports.length !== 1 ? 's' : ''} found in this date range
+        </div>
+
+        <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
+          <Btn variant="ghost" onClick={() => dispatch({ type: "SET_VIEW", view: "dashboard" })}>Cancel</Btn>
+          <Btn icon={Plus} onClick={generateNew} disabled={!reportName.trim()}>
+            Generate Report
+          </Btn>
+        </div>
+      </div>
+    );
+  }
+
+  const update = (data) => dispatch({ type: "UPDATE_EDITING_CUSTOM", data });
+  const updateList = (field, index, value) => {
+    const list = [...(custom[field] || [])];
+    list[index] = value;
+    update({ [field]: list });
+  };
+  const addListItem = (field) => update({ [field]: [...(custom[field] || []), ""] });
+  const removeListItem = (field, index) => update({ [field]: (custom[field] || []).filter((_, i) => i !== index) });
+
+  const ListEditor = ({ label, field }) => (
+    <ListEditorComponent label={label} field={field} items={custom[field] || []}
+      onUpdate={(i, val) => updateList(field, i, val)}
+      onAdd={() => addListItem(field)}
+      onRemove={(i) => removeListItem(field, i)}
+    />
+  );
+
+  return (
+    <div className="fade-in" style={{ maxWidth: "900px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+        <div>
+          <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>{custom.reportName}</h2>
+          <p style={{ fontSize: "13px", color: T.neutral[500] }}>{fmtDateShort(custom.startDate)} – {fmtDateShort(custom.endDate)} &middot; {project.client}</p>
+        </div>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <Btn variant="ghost" onClick={() => dispatch({ type: "SET_EDITING_CUSTOM", data: null })}>Cancel</Btn>
+          <Btn variant="navy" icon={FileDown} size="sm" onClick={() => exportCustomPDF(custom, project)}>Export PDF</Btn>
+          <Btn icon={Save} onClick={() => dispatch({ type: "SAVE_CUSTOM" })}>Save</Btn>
+        </div>
+      </div>
+
+      <Card style={{ marginBottom: "16px" }}>
+        <Input
+          label="Report Name"
+          value={custom.reportName}
+          onChange={e => update({ reportName: e.target.value })}
+        />
+      </Card>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+        <Card>
+          <ListEditor label="On-going / Completed Work" field="ongoingCompleted" />
+        </Card>
+        <Card>
+          <TextArea label="Outstanding RFIs" value={custom.outstandingRFIs} onChange={e => update({ outstandingRFIs: e.target.value })} />
+          <div style={{ marginTop: "12px" }}>
+            <TextArea label="Hot Submittals" value={custom.hotSubmittals} onChange={e => update({ hotSubmittals: e.target.value })} />
+          </div>
+          <div style={{ marginTop: "12px" }}>
+            <TextArea label="Safety" value={custom.safety} onChange={e => update({ safety: e.target.value })} />
+          </div>
+        </Card>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+        <Card>
+          <ListEditor label="Look Ahead Schedule" field="lookAhead" />
+        </Card>
+        <Card>
+          <TextArea label="Important Dates" value={custom.importantDates} onChange={e => update({ importantDates: e.target.value })} />
+          <div style={{ marginTop: "12px" }}>
+            <TextArea label="Owner Furnished Delivery Dates" value={custom.ownerDeliveryDates} onChange={e => update({ ownerDeliveryDates: e.target.value })} />
+          </div>
+        </Card>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+        <Card>
+          <TextArea label="Outstanding Items from Owner" value={custom.outstandingOwnerItems} onChange={e => update({ outstandingOwnerItems: e.target.value })} />
+        </Card>
+        <Card>
+          <TextArea label="Upcoming Inspections" value={custom.upcomingInspections} onChange={e => update({ upcomingInspections: e.target.value })} />
+        </Card>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+        <Card>
+          <TextArea label="Hindrances / Additional Delays" value={custom.hindrances || ""} onChange={e => update({ hindrances: e.target.value })} />
+        </Card>
+        <Card>
+          <Input label="Next OAC Meeting" type="date" value={custom.nextOACMeeting} onChange={e => update({ nextOACMeeting: e.target.value })} />
+        </Card>
+      </div>
+
+      <Card style={{ marginBottom: "16px" }}>
+        <SectionTitle icon={CircleDot}>Milestone Tracking</SectionTitle>
+        <div style={{ fontSize: "11px", color: T.neutral[500], marginBottom: "12px" }}>
+          Milestones for this project
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+          <thead>
+            <tr style={{ background: T.navy[800] }}>
+              {["Description","Target","Status"].map(h => (
+                <th key={h} scope="col" style={{ padding: "10px 14px", textAlign: "left", color: T.white, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {getNormalizedTasks(project).filter(t => t.isMilestone).map((t, i) => {
+              const statusColors = {
+                not_started: { bg: T.neutral[100], text: T.neutral[500], label: "Not Started" },
+                in_progress: { bg: "#fef3c7", text: "#92400e", label: "In Progress" },
+                complete: { bg: T.green[100], text: T.green[500], label: "Complete" }
+              };
+              const sc = statusColors[t.status] || statusColors.not_started;
+              return (
+                <tr key={t.id} style={{ borderBottom: `1px solid ${T.neutral[100]}`, background: i % 2 === 0 ? T.white : T.neutral[50] }}>
+                  <td style={{ padding: "9px 14px", fontWeight: 500, color: t.status === "complete" ? T.green[500] : t.status === "in_progress" ? "#92400e" : T.navy[800] }}>{t.description}</td>
+                  <td style={{ padding: "9px 14px", color: T.neutral[500] }}>{fmtDateShort(t.targetDate)}</td>
+                  <td style={{ padding: "9px 14px" }}>
+                    <span style={{ padding: "3px 8px", borderRadius: "10px", fontSize: "11px", fontWeight: 600, background: sc.bg, color: sc.text }}>{sc.label}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Card>
+
+      {/* Schedule Look-Ahead Upload */}
+      <Card style={{ marginBottom: "16px" }}>
+        <SectionTitle icon={Calendar}>Schedule Look-Ahead</SectionTitle>
+        <p style={{ fontSize: "12px", color: T.neutral[500], marginBottom: "12px" }}>
+          By default, a 3-week Gantt chart will be generated from your tasks. You can optionally replace it with an uploaded file.
+        </p>
+
+        {custom.scheduleFileUrl ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "12px", background: T.neutral[50], borderRadius: T.radius.md }}>
+            {custom.scheduleFileType?.startsWith('image/') ? (
+              <img src={custom.scheduleFileUrl} alt="Schedule preview" style={{ width: "120px", height: "80px", objectFit: "cover", borderRadius: T.radius.sm, border: `1px solid ${T.neutral[200]}` }} />
+            ) : (
+              <div style={{ width: "60px", height: "60px", background: T.navy[100], borderRadius: T.radius.sm, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <FileText size={24} style={{ color: T.navy[500] }} />
+              </div>
+            )}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[800] }}>
+                {custom.scheduleFileType?.startsWith('image/') ? 'Image' : custom.scheduleFileType === 'application/pdf' ? 'PDF' : 'File'} uploaded
+              </div>
+              <div style={{ fontSize: "11px", color: T.neutral[500] }}>
+                This will replace the generated Gantt chart in the PDF export.
+              </div>
+            </div>
+            <Btn variant="ghost" size="sm" icon={Trash2} onClick={() => update({ scheduleFileUrl: null, scheduleFileType: null })}
+              style={{ color: T.neutral[400] }}
+            >Remove</Btn>
+          </div>
+        ) : (
+          <div style={{ border: `2px dashed ${T.neutral[200]}`, borderRadius: T.radius.md, padding: "24px", textAlign: "center" }}>
+            <Upload size={24} style={{ color: T.neutral[400], marginBottom: "8px" }} />
+            <p style={{ fontSize: "13px", color: T.neutral[500], marginBottom: "12px" }}>
+              Upload an image, PDF, or Excel file to use instead of the generated Gantt chart
+            </p>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "8px 16px", background: T.navy[800], color: T.white, borderRadius: T.radius.md, fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+              <Upload size={16} />
+              Choose File
+              <input
+                type="file"
+                accept="image/*,.pdf,.xlsx,.xls"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const { uploadPhoto } = await import('./db.js');
+                    const result = await uploadPhoto(file, project.id, custom.id);
+                    update({ scheduleFileUrl: result.url, scheduleFileType: file.type });
+                  } catch (err) {
+                    console.error('Upload failed:', err);
+                    // Fallback to base64 for offline/error scenarios
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      update({ scheduleFileUrl: ev.target.result, scheduleFileType: file.type });
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+            </label>
+            <p style={{ fontSize: "11px", color: T.neutral[400], marginTop: "8px" }}>
+              Supports: JPG, PNG, PDF, Excel (.xlsx, .xls)
+            </p>
+          </div>
+        )}
+      </Card>
+
+      {(custom.selectedPhotos || []).length > 0 && (
+        <Card style={{ marginBottom: "16px" }}>
+          <SectionTitle icon={Camera} action={
+            <span style={{ fontSize: "12px", color: T.neutral[500] }}>
+              {custom.selectedPhotos.filter(p => p.selected !== false).length} of {custom.selectedPhotos.length} selected
+            </span>
+          }>Progress Photos for Report</SectionTitle>
+          <p style={{ fontSize: "12px", color: T.neutral[500], marginBottom: "12px" }}>
+            Toggle which photos to include in the exported PDF.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "10px" }}>
+            {custom.selectedPhotos.map((photo, i) => {
+              const isSelected = photo.selected !== false;
+              return (
+                <div key={photo.id || i}
+                  onClick={() => {
+                    const updated = [...custom.selectedPhotos];
+                    updated[i] = { ...updated[i], selected: !isSelected };
+                    update({ selectedPhotos: updated });
+                  }}
+                  style={{
+                    border: `2px solid ${isSelected ? T.green[500] : T.neutral[200]}`,
+                    borderRadius: T.radius.md, overflow: "hidden", cursor: "pointer",
+                    transition: "all 0.15s", opacity: isSelected ? 1 : 0.5,
+                  }}
+                >
+                  <div style={{
+                    height: "80px", background: `linear-gradient(135deg, ${T.neutral[200]}, ${T.neutral[100]})`,
+                    display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
+                  }}>
+                    <Camera size={24} style={{ color: T.neutral[300] }} />
+                    {isSelected && (
+                      <div style={{
+                        position: "absolute", top: "6px", right: "6px", width: "20px", height: "20px",
+                        borderRadius: "50%", background: T.green[500], display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        <Check size={12} style={{ color: T.white }} />
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ padding: "6px 8px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 600, color: T.navy[800] }}>{photo.description}</div>
+                    <div style={{ fontSize: "10px", color: T.neutral[500] }}>{fmtDateShort(photo.date)}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ─── Custom View Component (Read-only) ───────────────────────
+function CustomView({ state, dispatch }) {
+  const custom = state.viewingCustom;
+  const project = getActiveProject(state);
+
+  if (!custom) return null;
+
+  const ListDisplay = ({ label, items }) => (
+    <div style={{ marginBottom: "12px" }}>
+      <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[600], marginBottom: "6px" }}>{label}</div>
+      {(items || []).filter(Boolean).length > 0 ? (
+        <ul style={{ margin: 0, paddingLeft: "20px" }}>
+          {items.filter(Boolean).map((item, i) => (
+            <li key={i} style={{ fontSize: "13px", color: T.navy[700], marginBottom: "4px" }}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <span style={{ fontSize: "13px", color: T.neutral[400] }}>None</span>
+      )}
+    </div>
+  );
+
+  const FieldDisplay = ({ label, value }) => (
+    <div style={{ marginBottom: "12px" }}>
+      <div style={{ fontSize: "13px", fontWeight: 600, color: T.navy[600], marginBottom: "4px" }}>{label}</div>
+      <div style={{ fontSize: "13px", color: value ? T.navy[700] : T.neutral[400] }}>{value || "None"}</div>
+    </div>
+  );
+
+  return (
+    <div className="fade-in" style={{ maxWidth: "900px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
+        <div>
+          <Btn variant="ghost" icon={ArrowLeft} onClick={() => dispatch({ type: "SET_VIEW", view: "dashboard" })} style={{ marginBottom: "8px" }}>Back</Btn>
+          <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>{custom.reportName}</h2>
+          <p style={{ fontSize: "13px", color: T.neutral[500] }}>{fmtDateShort(custom.startDate)} – {fmtDateShort(custom.endDate)} &middot; {project.jobName}</p>
+        </div>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <Btn variant="ghost" icon={Trash2} onClick={() => { if (confirm(`Delete "${custom.reportName}"?`)) { dispatch({ type: "DELETE_CUSTOM", id: custom.id }); dispatch({ type: "SET_VIEW", view: "dashboard" }); } }}
+            style={{ color: T.neutral[400] }}
+          >Delete</Btn>
+          <Btn variant="secondary" icon={Edit3} onClick={() => dispatch({ type: "SET_EDITING_CUSTOM", data: custom })}>Edit</Btn>
+          <Btn variant="navy" icon={FileDown} onClick={() => exportCustomPDF(custom, project)}>Export PDF</Btn>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+        <Card>
+          <ListDisplay label="On-going / Completed Work" items={custom.ongoingCompleted} />
+        </Card>
+        <Card>
+          <ListDisplay label="Look Ahead Schedule" items={custom.lookAhead} />
+        </Card>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+        <Card><FieldDisplay label="Outstanding RFI's" value={custom.outstandingRFIs} /></Card>
+        <Card><FieldDisplay label="Hot Submittals" value={custom.hotSubmittals} /></Card>
+        <Card><FieldDisplay label="Safety" value={custom.safety} /></Card>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+        <Card><FieldDisplay label="Important Dates" value={custom.importantDates} /></Card>
+        <Card><FieldDisplay label="Owner Delivery Dates" value={custom.ownerDeliveryDates} /></Card>
+        <Card><FieldDisplay label="Outstanding Items – Owner" value={custom.outstandingOwnerItems} /></Card>
+        <Card><FieldDisplay label="Upcoming Inspections" value={custom.upcomingInspections} /></Card>
+        <Card><FieldDisplay label="Hindrances" value={custom.hindrances} /></Card>
+        <Card><FieldDisplay label="Next OAC Meeting" value={fmtDateShort(custom.nextOACMeeting)} /></Card>
+      </div>
+
+      {(custom.selectedPhotos || []).filter(p => p.selected !== false).length > 0 && (
+        <Card>
+          <SectionTitle icon={Camera}>Progress Photos</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "12px" }}>
+            {custom.selectedPhotos.filter(p => p.selected !== false).map((photo, i) => (
               <div key={photo.id || i} style={{ border: `1px solid ${T.neutral[200]}`, borderRadius: T.radius.md, overflow: "hidden" }}>
                 {(photo.thumb || photo.url) ? (
                   <img src={photo.thumb || photo.url} alt={photo.description} style={{ width: "100%", height: "120px", objectFit: "cover" }} />
@@ -5473,8 +6474,34 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
         {/* Weekly Reports Tab */}
         {activeTab === "weekly" && (
           <div className="fade-in">
-            <h2 style={{ fontSize: "20px", fontWeight: 700, color: T.white, marginBottom: "20px" }}>Weekly Reports</h2>
-            <div style={{ display: "grid", gap: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", flexWrap: "wrap", gap: "12px" }}>
+              <h2 style={{ fontSize: "20px", fontWeight: 700, color: T.white }}>Weekly Reports</h2>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <button
+                  onClick={() => dispatch({ type: "SET_VIEW", view: "weeklyGen" })}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "8px",
+                    padding: "10px 18px", border: "none", borderRadius: "8px",
+                    background: T.orange[500], color: T.white, fontWeight: 600, fontSize: "14px", cursor: "pointer",
+                  }}
+                >
+                  <Plus size={16} /> New Weekly Report
+                </button>
+                <button
+                  onClick={() => dispatch({ type: "SET_EDITING_CUSTOM", data: null })}
+                  style={{
+                    display: "flex", alignItems: "center", gap: "8px",
+                    padding: "10px 18px", border: "1px solid rgba(255,255,255,0.3)", borderRadius: "8px",
+                    background: "rgba(255,255,255,0.1)", color: T.white, fontWeight: 600, fontSize: "14px", cursor: "pointer",
+                  }}
+                >
+                  <FileText size={16} /> New Custom Report
+                </button>
+              </div>
+            </div>
+
+            {/* Weekly Reports List */}
+            <div style={{ display: "grid", gap: "16px", marginBottom: "32px" }}>
               {projectWeeklies.map(w => (
                 <div key={w.id} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px" }}>
                   <div style={{ fontSize: "18px", fontWeight: 700, color: T.white, marginBottom: "16px" }}>Week Ending {fmtDateShort(w.weekEnding)}</div>
@@ -5498,6 +6525,41 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
               ))}
               {projectWeeklies.length === 0 && <p style={{ color: T.navy[400], textAlign: "center", padding: "40px" }}>No weekly reports yet.</p>}
             </div>
+
+            {/* Custom Reports Section */}
+            {state.customReports.filter(r => r.projectId === project.id).length > 0 && (
+              <>
+                <h3 style={{ fontSize: "18px", fontWeight: 700, color: T.white, marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
+                  <FileText size={20} style={{ color: T.orange[500] }} /> Custom Reports
+                </h3>
+                <div style={{ display: "grid", gap: "16px" }}>
+                  {state.customReports.filter(r => r.projectId === project.id).map(c => (
+                    <div key={c.id}
+                      onClick={() => dispatch({ type: "VIEW_CUSTOM", report: c })}
+                      style={{
+                        background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "12px", padding: "24px",
+                        cursor: "pointer", transition: "all 0.2s",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = T.orange[500]}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div>
+                          <div style={{ fontSize: "18px", fontWeight: 700, color: T.white, marginBottom: "4px" }}>{c.reportName}</div>
+                          <div style={{ fontSize: "13px", color: T.navy[400] }}>{fmtDateShort(c.startDate)} – {fmtDateShort(c.endDate)}</div>
+                        </div>
+                        <ChevronRight size={20} style={{ color: T.navy[400] }} />
+                      </div>
+                      {c.ongoingCompleted?.filter(Boolean).length > 0 && (
+                        <div style={{ marginTop: "12px", fontSize: "13px", color: T.navy[400] }}>
+                          {c.ongoingCompleted.filter(Boolean).length} items completed
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -5699,10 +6761,11 @@ export default function App() {
         // Then sync with Supabase if online
         if (isOnline()) {
           try {
-            const [projects, dailyReports, weeklyReports] = await Promise.all([
+            const [projects, dailyReports, weeklyReports, customReports] = await Promise.all([
               loadProjects(),
               loadDailyReports(),
               loadWeeklyReports(),
+              loadCustomReports(),
             ]);
 
             // Merge photos from local IndexedDB with Supabase records.
@@ -5748,7 +6811,7 @@ export default function App() {
               });
             }
 
-            dispatch({ type: "LOAD_DATA", projects, dailyReports, weeklyReports });
+            dispatch({ type: "LOAD_DATA", projects, dailyReports, weeklyReports, customReports });
             console.log("Synced with Supabase (photos merged from local)");
           } catch (err) {
             console.error("Failed to sync with Supabase, using local data:", err);
@@ -5801,9 +6864,11 @@ export default function App() {
           if (item.type === 'saveProject') await saveProject(item.data);
           else if (item.type === 'saveDailyReport') await saveDailyReport(item.data);
           else if (item.type === 'saveWeeklyReport') await saveWeeklyReport(item.data);
+          else if (item.type === 'saveCustomReport') await saveCustomReport(item.data);
           else if (item.type === 'deleteProject') await deleteProject(item.data);
           else if (item.type === 'deleteDailyReport') await deleteDailyReport(item.data);
           else if (item.type === 'deleteWeeklyReport') await deleteWeeklyReport(item.data);
+          else if (item.type === 'deleteCustomReport') await deleteCustomReport(item.data);
         } catch (err) {
           console.error("Failed to sync item:", item, err);
         }
@@ -5998,6 +7063,38 @@ export default function App() {
     prevWeekliesRef.current = state.weeklyReports;
   }, [state.weeklyReports, state.loading]);
 
+  // Watch for custom report changes and save (online) or queue (offline)
+  const prevCustomsRef = useRef(null);
+  useEffect(() => {
+    if (!loadedRef.current || state.loading) return;
+    if (prevCustomsRef.current !== null) {
+      // Detect deletions BEFORE updating the ref
+      const deletedCustoms = prevCustomsRef.current.filter(r => !state.customReports.find(sr => sr.id === r.id));
+      deletedCustoms.forEach(async (r) => {
+        if (isOnline()) {
+          deleteCustomReport(r.id).catch(err => console.error("Failed to delete custom report:", err));
+        } else {
+          await addPendingSync({ type: 'deleteCustomReport', data: r.id });
+          setPendingSyncCount(c => c + 1);
+        }
+      });
+
+      // Then save changed/new custom reports
+      state.customReports.forEach(async (r) => {
+        const prev = prevCustomsRef.current?.find(pr => pr.id === r.id);
+        if (!prev || JSON.stringify(prev) !== JSON.stringify(r)) {
+          if (isOnline()) {
+            saveCustomReport(r).catch(err => console.error("Failed to save custom report:", err));
+          } else {
+            await addPendingSync({ type: 'saveCustomReport', data: r });
+            setPendingSyncCount(c => c + 1);
+          }
+        }
+      });
+    }
+    prevCustomsRef.current = state.customReports;
+  }, [state.customReports, state.loading]);
+
   // Handle daily deletion (online) or queue (offline)
   useEffect(() => {
     if (!loadedRef.current || !prevDailiesRef.current) return;
@@ -6037,6 +7134,8 @@ export default function App() {
       case "dailyView": return <DailyView state={state} dispatch={dispatch} />;
       case "weeklyGen": return <WeeklyGenerator state={state} dispatch={dispatch} />;
       case "weeklyView": return <WeeklyView state={state} dispatch={dispatch} />;
+      case "customGen": return <CustomReportGenerator state={state} dispatch={dispatch} />;
+      case "customView": return <CustomView state={state} dispatch={dispatch} />;
       case "schedule": return <ScheduleView state={state} dispatch={dispatch} />;
       case "photos": return <PhotoGallery state={state} dispatch={dispatch} />;
       case "safety": return <SafetyMeetings state={state} dispatch={dispatch} />;
