@@ -748,6 +748,53 @@ const getLogoHtmlWithBase64 = (base64Data, height = 40) => {
   return `<img src="${base64Data}" alt="Company Logo" style="height:${height}px;object-fit:contain;border-radius:4px" />`;
 };
 
+// Convert PDF to image using pdf.js (renders first page)
+const pdfToImage = async (pdfUrl) => {
+  try {
+    // Load pdf.js from CDN
+    if (!window.pdfjsLib) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+
+    // For data URLs, use them directly; for regular URLs, fetch first
+    let pdfData;
+    if (pdfUrl.startsWith('data:')) {
+      const base64 = pdfUrl.split(',')[1];
+      pdfData = atob(base64);
+    } else {
+      const response = await fetch(pdfUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      pdfData = new Uint8Array(arrayBuffer);
+    }
+
+    const pdf = await window.pdfjsLib.getDocument({ data: pdfData }).promise;
+    const page = await pdf.getPage(1);
+
+    // Render at 2x scale for good quality
+    const scale = 2;
+    const viewport = page.getViewport({ scale });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    return canvas.toDataURL('image/png');
+  } catch (e) {
+    console.error('Failed to convert PDF to image:', e);
+    return null;
+  }
+};
+
 const exportDailyPDF = async (report, project, includePhotos = false) => {
   // Convert logo to base64 for reliable PDF embedding
   const logoBase64 = await imageToBase64(getProjectLogo(project));
@@ -968,6 +1015,15 @@ const exportWeeklyPDF = async (weekly, project) => {
   // Convert logo to base64 for reliable PDF embedding
   const logoBase64 = await imageToBase64(getProjectLogo(project));
   const logoHtml = getLogoHtmlWithBase64(logoBase64, 36);
+
+  // Convert PDF schedule to image if needed
+  let scheduleImageUrl = null;
+  if (weekly.scheduleFileUrl && weekly.scheduleFileType === 'application/pdf') {
+    scheduleImageUrl = await pdfToImage(weekly.scheduleFileUrl);
+  } else if (weekly.scheduleFileUrl && weekly.scheduleFileType?.startsWith('image/')) {
+    // Convert image to base64 for reliable embedding
+    scheduleImageUrl = await imageToBase64(weekly.scheduleFileUrl);
+  }
 
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Weekly Report ${weekly.weekEnding}</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -1277,26 +1333,19 @@ ${(weekly.selectedPhotos || []).filter(p => p.selected !== false).length > 0 ? `
 ${(() => {
   // If user uploaded a schedule file, show that instead of Gantt chart
   if (weekly.scheduleFileUrl) {
-    const isImage = weekly.scheduleFileType && weekly.scheduleFileType.startsWith('image/');
-    const isPdf = weekly.scheduleFileType === 'application/pdf';
     const headerHtml = '<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">' +
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">' +
       '<div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>' +
       '<h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">Schedule Look-Ahead</h2>' +
       '</div>';
 
-    if (isImage) {
+    // If we have a converted image (from PDF or image), use that
+    if (scheduleImageUrl) {
       return headerHtml +
-        '<img src="' + weekly.scheduleFileUrl + '" alt="Schedule" style="width:100%;max-width:100%;height:auto;border-radius:8px;border:1px solid #e5e7eb" />' +
+        '<img src="' + scheduleImageUrl + '" alt="Schedule" style="width:100%;max-width:100%;height:auto;border-radius:8px;border:1px solid #e5e7eb" />' +
         '</div>';
-    } else if (isPdf) {
-      return headerHtml +
-        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
-        '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached (PDF)</p>' +
-        '<a href="' + weekly.scheduleFileUrl + '" target="_blank" style="color:#e8853a;font-weight:600;text-decoration:underline">View Schedule PDF</a>' +
-        '</div></div>';
     } else {
-      // Excel or other file
+      // Fallback for Excel or other files that couldn't be converted
       return headerHtml +
         '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
         '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached</p>' +
@@ -1408,6 +1457,14 @@ const exportCustomPDF = async (custom, project) => {
   const fmtD = fmtDateShort;
   const logoBase64 = await imageToBase64(getProjectLogo(project));
   const logoHtml = getLogoHtmlWithBase64(logoBase64, 36);
+
+  // Convert PDF schedule to image if needed
+  let scheduleImageUrl = null;
+  if (custom.scheduleFileUrl && custom.scheduleFileType === 'application/pdf') {
+    scheduleImageUrl = await pdfToImage(custom.scheduleFileUrl);
+  } else if (custom.scheduleFileUrl && custom.scheduleFileType?.startsWith('image/')) {
+    scheduleImageUrl = await imageToBase64(custom.scheduleFileUrl);
+  }
 
   const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${custom.reportName}</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -1666,26 +1723,19 @@ ${(custom.selectedPhotos || []).filter(p => p.selected !== false).length > 0 ? `
 ${(() => {
   // If user uploaded a schedule file, show that instead of Gantt chart
   if (custom.scheduleFileUrl) {
-    const isImage = custom.scheduleFileType && custom.scheduleFileType.startsWith('image/');
-    const isPdf = custom.scheduleFileType === 'application/pdf';
     const headerHtml = '<div class="page-break" style="background:#fff;padding:32px;max-width:1100px;margin:0 auto">' +
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #e8853a">' +
       '<div style="width:4px;height:28px;background:#e8853a;border-radius:2px"></div>' +
       '<h2 style="font-size:18px;font-weight:800;color:#1a2744;margin:0">Schedule Look-Ahead</h2>' +
       '</div>';
 
-    if (isImage) {
+    // If we have a converted image (from PDF or image), use that
+    if (scheduleImageUrl) {
       return headerHtml +
-        '<img src="' + custom.scheduleFileUrl + '" alt="Schedule" style="width:100%;max-width:100%;height:auto;border-radius:8px;border:1px solid #e5e7eb" />' +
+        '<img src="' + scheduleImageUrl + '" alt="Schedule" style="width:100%;max-width:100%;height:auto;border-radius:8px;border:1px solid #e5e7eb" />' +
         '</div>';
-    } else if (isPdf) {
-      return headerHtml +
-        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
-        '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached (PDF)</p>' +
-        '<a href="' + custom.scheduleFileUrl + '" target="_blank" style="color:#e8853a;font-weight:600;text-decoration:underline">View Schedule PDF</a>' +
-        '</div></div>';
     } else {
-      // Excel or other file
+      // Fallback for Excel or other files that couldn't be converted
       return headerHtml +
         '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:24px;text-align:center">' +
         '<p style="color:#6b7280;margin-bottom:12px">Schedule file attached</p>' +
