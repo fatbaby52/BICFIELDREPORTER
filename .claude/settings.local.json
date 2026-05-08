@@ -26,7 +26,20 @@
       "Bash(npm install:*)",
       "Bash(wc:*)",
       "Bash(npx next lint:*)",
-      "Bash(npx eslint:*)"
+      "Bash(npx eslint:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(ls -la /tmp/ 2>/dev/null | head -20; ls public/logo-4j.png 2>/dev/null && echo \"exists\")",
+      "Bash(netlify --version)",
+      "Bash(netlify status *)",
+      "Bash(awk 'NR>=4140 && NR<=4500 && /useState|useRef|useEffect/ {print NR\": \"$0}' \"src/App.jsx\")",
+      "Bash(awk 'NR>=2110 && NR<=2120 {print NR\": \"$0}' \"src/App.jsx\")",
+      "Bash(supabase --version)",
+      "Bash(psql --version)",
+      "Bash(ls -la .env* 2>&1; echo \"---\"; cd ../../.. && ls -la .env* 2>&1; echo \"---worktree files---\"; ls -la 2>&1 | head -30)",
+      "Bash(supabase projects *)",
+      "Bash(supabase link *)",
+      "Bash(supabase db *)",
+      "Bash(git restore *)"
     ]
   }
 }

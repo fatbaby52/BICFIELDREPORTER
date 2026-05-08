@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-// BIC Field Reporter — Offline Storage (IndexedDB)
+// 4J Field Reporter — Offline Storage (IndexedDB)
 // Stores data locally when offline, syncs when back online
 // ═══════════════════════════════════════════════════════════════
 

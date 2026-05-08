@@ -4,3 +4,4 @@ dist
 .env.local
 vite.config.js.timestamp-*
 nul
+supabase/.temp/

@@ -1,6 +1,6 @@
 import React, { useState, useReducer, useRef, useEffect, useCallback, useMemo } from "react";
 import * as lucide from "lucide-react";
-import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, loadCustomReports, saveCustomReport, deleteCustomReport, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url, uploadProjectLogo, deleteProjectLogo } from './db';
+import { loadProjects, saveProject, deleteProject, loadDailyReports, saveDailyReport, deleteDailyReport, loadWeeklyReports, saveWeeklyReport, deleteWeeklyReport, loadCustomReports, saveCustomReport, deleteCustomReport, loadQuickNotes, saveQuickNote, deleteQuickNote, loadDocuments, saveDocument, deleteDocument, uploadDocument, deleteDocumentFile, uploadPhoto, deletePhoto, uploadBase64Photo, isBase64Url, uploadProjectLogo, deleteProjectLogo } from './db';
 import { initOfflineStorage, saveAppState, loadAppState, isOnline, onConnectivityChange, addPendingSync, getPendingSyncs, clearPendingSyncs } from './offlineStorage';
 import SafetyMeetings, { SAFETY_TOPICS, CAT_COLORS } from './SafetyMeetings';
 import { heicTo } from 'heic-to';
@@ -13,11 +13,12 @@ const {
   Building2, HardHat, Truck, Wrench, Users, Calendar, MapPin,
   FileSpreadsheet, FileDown, Menu, ChevronLeft, CircleDot, Search,
   Filter, Tag, TriangleAlert, CheckCircle2, Circle, Loader2, ChevronUp,
-  Wifi, WifiOff, RefreshCw, CloudOff, Shield, Star
+  Wifi, WifiOff, RefreshCw, CloudOff, Shield, Star, StickyNote, MessageSquare,
+  Folder, ExternalLink, FileType, Sparkle
 } = lucide;
 
 /* ═══════════════════════════════════════════════════════════════
-   BIC Field Reporter — Construction Daily & Weekly Report App
+   4J Field Reporter — Construction Daily & Weekly Report App
    ═══════════════════════════════════════════════════════════════ */
 
 // ─── Design Tokens ───────────────────────────────────────────
@@ -660,7 +661,6 @@ const generateLookAhead = (tasks, weeksAhead = 3) => {
 };
 
 // ─── Logos ───────────────────────────────────────────────────
-const BIC_LOGO = "/logo-blue.png";
 const DEFAULT_LOGO = "/logo-4j.png"; // 4J logo as default when no project logo set
 
 // Get the logo for a project (custom logo or default 4J)
@@ -688,7 +688,7 @@ const exportDailyExcel = (report, project) => {
   let csv = "";
   const row = (...cells) => { csv += cells.map(c => `"${String(c || "").replace(/"/g, '""')}"`).join(",") + "\n"; };
 
-  row("BIC Daily Job Report"); row("");
+  row("4J Daily Job Report"); row("");
   row("Date", fmtDate(report.date), "", "JOB #", project.jobNumber);
   row("Day", report.day, "", "Title", "Daily Report");
   row("Weather", report.weather, "", "Job Name", project.jobName);
@@ -748,6 +748,56 @@ const getLogoHtmlWithBase64 = (base64Data, height = 40) => {
   return `<img src="${base64Data}" alt="Company Logo" style="height:${height}px;object-fit:contain;border-radius:4px" />`;
 };
 
+// Lazy-load pdf.js from CDN (used by pdfToImage and pdfToText)
+const ensurePdfJs = async () => {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  return window.pdfjsLib;
+};
+
+// Extract plain text from a PDF (all pages, joined). Returns "" on failure.
+const pdfToText = async (source) => {
+  try {
+    const lib = await ensurePdfJs();
+    let pdfData;
+    if (source instanceof File || source instanceof Blob) {
+      const buf = await source.arrayBuffer();
+      pdfData = new Uint8Array(buf);
+    } else if (typeof source === 'string') {
+      if (source.startsWith('data:')) {
+        const base64 = source.split(',')[1];
+        const bin = atob(base64);
+        pdfData = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) pdfData[i] = bin.charCodeAt(i);
+      } else {
+        const response = await fetch(source);
+        const buf = await response.arrayBuffer();
+        pdfData = new Uint8Array(buf);
+      }
+    } else {
+      return '';
+    }
+    const pdf = await lib.getDocument({ data: pdfData }).promise;
+    const pageTexts = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      pageTexts.push(content.items.map(it => it.str).join(' '));
+    }
+    return pageTexts.join('\n\n').trim();
+  } catch (e) {
+    console.error('pdfToText failed:', e);
+    return '';
+  }
+};
+
 // Convert PDF to image using pdf.js (renders first page)
 const pdfToImage = async (pdfUrl) => {
   try {
@@ -800,6 +850,7 @@ const exportDailyPDF = async (report, project, includePhotos = false) => {
   const logoBase64 = await imageToBase64(getProjectLogo(project));
   const logoHtml = getLogoHtmlWithBase64(logoBase64, 40);
 
+  const isCM = (project?.projectType || "GC") === "CM";
   const allEquip = [...project.equipmentOwned.map(e => ({ ...e, type: "Owned" })), ...project.equipmentRented.map(e => ({ ...e, type: "Rented" }))];
   const present = allEquip.filter(e => report.equipmentPresent.includes(e.id));
   const roles = ["Indirect Labor","Apprentices","Foreman","Operators","Laborers","Carpenters","Cement Masons"];
@@ -891,14 +942,14 @@ const exportDailyPDF = async (report, project, includePhotos = false) => {
       ${logoHtml}
       <h1>${project.jobName}</h1>
       <div class="subtitle">JOB #${project.jobNumber} · ${project.client}</div>
-      <div class="report-type">Daily Field Report</div>
+      <div class="report-type">${isCM ? "CM Daily Field Report" : "Daily Field Report"}</div>
     </div>
     <div class="date-box">
       <div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px">Report Date</div>
       <div class="date">${fmtDateShort(report.date)}</div>
       <div class="meta" style="margin-top:8px">${report.day} · ${report.weather}${report.temperature ? ` · ${report.temperature}` : ""}</div>
       ${report.rainfall ? `<div class="meta">Rainfall: ${report.rainfall} in</div>` : ""}
-      <div class="meta">Shift: ${report.shift.hours} ${report.shift.type}</div>
+      ${!isCM ? `<div class="meta">Shift: ${report.shift.hours} ${report.shift.type}</div>` : ""}
       <div class="meta">Incidents: ${report.incidents || "None"}</div>
     </div>
   </div>
@@ -909,7 +960,7 @@ const exportDailyPDF = async (report, project, includePhotos = false) => {
   <div class="notes">${report.generalNotes || "No notes recorded."}</div>
 </div>
 
-<div class="grid">
+${!isCM ? `<div class="grid">
   <div class="section">
     <div class="section-title">Daily Workforce</div>
     <table>
@@ -935,14 +986,14 @@ const exportDailyPDF = async (report, project, includePhotos = false) => {
       ${present.length === 0 ? "<tr><td colspan=3 style='color:#9ca3af;text-align:center;padding:20px'>No equipment logged</td></tr>" : ""}
     </table>
   </div>
-</div>
+</div>` : ""}
 
-<div class="grid">
+${isCM ? `<div class="info-box${report.delaysProblems && !isNoIncident(report.delaysProblems) ? ' alert' : ''}" style="margin-bottom:16px"><div class="info-box-title">Delays / Problems</div><div class="info-box-content">${report.delaysProblems || "None"}</div></div>` : `<div class="grid">
   <div class="info-box"><div class="info-box-title">Third Party Utilities</div><div class="info-box-content">${report.thirdPartyUtilities || "None"}</div></div>
   <div class="info-box"><div class="info-box-title">Material Deliveries</div><div class="info-box-content">${report.materialDeliveries || "None"}</div></div>
   <div class="info-box${report.delaysProblems && !isNoIncident(report.delaysProblems) ? ' alert' : ''}"><div class="info-box-title">Delays / Problems</div><div class="info-box-content">${report.delaysProblems || "None"}</div></div>
   <div class="info-box"><div class="info-box-title">Extra Work / Claims / Misc.</div><div class="info-box-content">${report.extraWork || "None"}</div></div>
-</div>
+</div>`}
 
 ${includePhotos && (report.photos || []).filter(p => p.starred).length > 0 ? `
 <div class="section">
@@ -1011,6 +1062,7 @@ window.onload = async () => {
 
 const exportWeeklyPDF = async (weekly, project) => {
   const fmtD = fmtDateShort;
+  const isCM = (project?.projectType || "GC") === "CM";
 
   // Convert logo to base64 for reliable PDF embedding
   const logoBase64 = await imageToBase64(getProjectLogo(project));
@@ -1216,7 +1268,7 @@ const exportWeeklyPDF = async (weekly, project) => {
       <div class="header-inner">
         <div class="header-left">
           ${logoHtml}
-          <div class="report-badge">Weekly Progress Report</div>
+          <div class="report-badge">${isCM ? "CM Weekly Progress Report" : "Weekly Progress Report"}</div>
         </div>
         <div class="header-right">
           <div class="week-ending">Week Ending</div>
@@ -1257,6 +1309,17 @@ const exportWeeklyPDF = async (weekly, project) => {
       </div>
     </div>
   </div>
+
+  ${isCM ? `<div class="two-col" style="margin-bottom:20px">
+    <div class="panel">
+      <div class="panel-title orange">Meeting Outcomes</div>
+      <ul>${(weekly.meetingOutcomes||[]).filter(Boolean).map(i => `<li><span>${i}</span></li>`).join("") || '<li><span>No items</span></li>'}</ul>
+    </div>
+    <div class="panel">
+      <div class="panel-title orange">Outstanding Items</div>
+      <ul>${(weekly.outstandingItems||[]).filter(Boolean).map(i => `<li><span>${i}</span></li>`).join("") || '<li><span>No items</span></li>'}</ul>
+    </div>
+  </div>` : ""}
 
   <div class="main-grid">
     <div class="panel milestone-section">
@@ -1302,7 +1365,7 @@ const exportWeeklyPDF = async (weekly, project) => {
   </div>
 
   <div class="footer">
-    <div class="footer-text">Generated ${new Date().toLocaleDateString()} · Blue Iron Corporation</div>
+    <div class="footer-text">Generated ${new Date().toLocaleDateString()} · 4J Construction Service</div>
   </div>
 
     </div><!-- end report-body -->
@@ -1692,7 +1755,7 @@ const exportCustomPDF = async (custom, project) => {
   </div>
 
   <div class="footer">
-    <div class="footer-text">Generated ${new Date().toLocaleDateString()} · Blue Iron Corporation</div>
+    <div class="footer-text">Generated ${new Date().toLocaleDateString()} · 4J Construction Service</div>
   </div>
 
     </div><!-- end report-body -->
@@ -1914,12 +1977,18 @@ const aggregateWeeklyData = (weekReports, project) => {
 
 const getActiveProject = (state) => state.projects.find(p => p.id === state.activeProjectId) || null;
 
+const PROJECT_TYPES = {
+  GC: { id: "GC", label: "General Contractor", short: "GC" },
+  CM: { id: "CM", label: "Construction Management", short: "CM" },
+};
+
 const newProjectTemplate = () => ({
   id: `proj-${Date.now()}`,
   jobNumber: "",
   jobName: "",
   client: "",
   preparedBy: "",
+  projectType: "GC", // 'GC' (General Contractor) or 'CM' (Construction Management)
   logoUrl: null, // Project-specific logo URL (uses 4J default if null)
   tasks: [],
   equipmentOwned: [],
@@ -1935,6 +2004,8 @@ const initialState = {
   dailyReports: [],
   weeklyReports: [],
   customReports: [],
+  quickNotes: [],
+  documents: [],
   currentView: "projects",
   editingDaily: null,
   viewingDaily: null,
@@ -1942,6 +2013,7 @@ const initialState = {
   viewingWeekly: null,
   editingCustom: null,
   viewingCustom: null,
+  editingNote: null, // active QuickNote in modal (null = closed)
   loading: true,
 };
 
@@ -1960,6 +2032,8 @@ function reducer(state, action) {
       dailyReports: action.dailyReports,
       weeklyReports: action.weeklyReports,
       customReports: action.customReports || [],
+      quickNotes: action.quickNotes || [],
+      documents: action.documents || [],
       activeProjectId: action.projects.length > 0 ? action.projects[0].id : null,
       currentView: action.projects.length > 0 ? "dashboard" : "projects",
       loading: false,
@@ -1981,6 +2055,8 @@ function reducer(state, action) {
         dailyReports: state.dailyReports.filter(r => r.projectId !== action.id),
         weeklyReports: state.weeklyReports.filter(r => r.projectId !== action.id),
         customReports: state.customReports.filter(r => r.projectId !== action.id),
+        quickNotes: state.quickNotes.filter(n => n.projectId !== action.id),
+        documents: state.documents.filter(d => d.projectId !== action.id),
         currentView: remaining.length ? "dashboard" : "projects",
       };
     }
@@ -2098,6 +2174,35 @@ function reducer(state, action) {
     case "DELETE_CUSTOM": return { ...state, customReports: state.customReports.filter(r => r.id !== action.id) };
     case "VIEW_CUSTOM": return { ...state, viewingCustom: action.report, currentView: "customView" };
     case "UPDATE_CUSTOM_PHOTOS": return { ...state, customReports: state.customReports.map(r => r.id === action.reportId ? { ...r, selectedPhotos: action.photos } : r) };
+
+    // Quick Notes
+    case "OPEN_NOTE_MODAL": return { ...state, editingNote: action.note || {
+      id: `qn-${Date.now()}`,
+      projectId: state.activeProjectId,
+      text: "",
+      tags: [],
+      photoUrl: null,
+      photoPath: null,
+      author: project?.preparedBy || "",
+      createdAt: new Date().toISOString(),
+      _isNew: true,
+    }};
+    case "CLOSE_NOTE_MODAL": return { ...state, editingNote: null };
+    case "UPDATE_EDITING_NOTE": return { ...state, editingNote: { ...state.editingNote, ...action.data } };
+    case "SAVE_NOTE": {
+      const { _isNew, ...note } = state.editingNote;
+      const exists = state.quickNotes.find(n => n.id === note.id);
+      const notes = exists
+        ? state.quickNotes.map(n => n.id === note.id ? note : n)
+        : [note, ...state.quickNotes];
+      return { ...state, quickNotes: notes, editingNote: null };
+    }
+    case "DELETE_NOTE": return { ...state, quickNotes: state.quickNotes.filter(n => n.id !== action.id), editingNote: null };
+
+    // Project Documents
+    case "ADD_DOCUMENT": return { ...state, documents: [action.doc, ...state.documents] };
+    case "UPDATE_DOCUMENT": return { ...state, documents: state.documents.map(d => d.id === action.id ? { ...d, ...action.data } : d) };
+    case "DELETE_DOCUMENT": return { ...state, documents: state.documents.filter(d => d.id !== action.id) };
     default: return state;
   }
 }
@@ -2113,6 +2218,8 @@ function Sidebar({ currentView, dispatch, projects, activeProjectId }) {
     { id: "projectSetup", icon: FolderCog, label: "Project Setup" },
     { id: "dailyEntry", icon: ClipboardEdit, label: "Daily Entry" },
     { id: "weeklyGen", icon: CalendarRange, label: "Weekly Report" },
+    { id: "quickNotes", icon: StickyNote, label: "Notes" },
+    { id: "documents", icon: Folder, label: "Documents" },
     { id: "schedule", icon: Calendar, label: "Schedule" },
     { id: "photos", icon: Image, label: "Photo Gallery" },
     { id: "safety", icon: Shield, label: "Safety Meetings" },
@@ -2250,6 +2357,8 @@ function MobileNav({ currentView, dispatch, projects, activeProjectId }) {
     { id: "projectSetup", icon: FolderCog, label: "Project Setup" },
     { id: "dailyEntry", icon: ClipboardEdit, label: "Daily Entry" },
     { id: "weeklyGen", icon: CalendarRange, label: "Weekly Report" },
+    { id: "quickNotes", icon: StickyNote, label: "Notes" },
+    { id: "documents", icon: Folder, label: "Documents" },
     { id: "schedule", icon: Calendar, label: "Schedule" },
     { id: "photos", icon: Image, label: "Photo Gallery" },
     { id: "safety", icon: Shield, label: "Safety Meetings" },
@@ -2452,8 +2561,9 @@ function ProjectsList({ state, dispatch }) {
                   <div style={{ width: "5px", background: isActive ? T.orange[500] : T.neutral[300], flexShrink: 0 }} />
                   <div style={{ flex: 1, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px", flexWrap: "wrap" }}>
                         <Badge color="orange">#{p.jobNumber || "—"}</Badge>
+                        <ProjectTypeBadge type={p.projectType} size="sm" />
                         {isActive && <Badge color="green">Active</Badge>}
                       </div>
                       <h3 style={{ fontSize: "16px", fontWeight: 700, color: T.navy[800], marginBottom: "2px" }}>
@@ -2515,16 +2625,52 @@ function ProjectAI({ state, project }) {
         .slice(-15)
         .map(r => ({
           date: r.date,
+          day: r.day,
           weather: r.weather,
           temperature: r.temperature,
           rainfall: r.rainfall,
           shift: r.shift,
-          generalNotes: r.generalNotes ? r.generalNotes.substring(0, 500) : "",
+          generalNotes: r.generalNotes ? r.generalNotes.substring(0, 800) : "",
           incidents: r.incidents,
           delaysProblems: r.delaysProblems,
           extraWork: r.extraWork,
           materialDeliveries: r.materialDeliveries,
           workforce: r.workforce
+        }));
+      const trimmedWeeklies = (state.weeklyReports || [])
+        .filter(w => w.projectId === project.id)
+        .slice(-8)
+        .map(w => ({
+          weekEnding: w.weekEnding,
+          ongoingCompleted: w.ongoingCompleted,
+          lookAhead: w.lookAhead,
+          outstandingRFIs: w.outstandingRFIs,
+          hotSubmittals: w.hotSubmittals,
+          safety: w.safety,
+          outstandingOwnerItems: w.outstandingOwnerItems,
+          upcomingInspections: w.upcomingInspections,
+          hindrances: w.hindrances,
+          nextOACMeeting: w.nextOACMeeting,
+          meetingOutcomes: w.meetingOutcomes,
+          outstandingItems: w.outstandingItems,
+        }));
+      const trimmedNotes = (state.quickNotes || [])
+        .filter(n => n.projectId === project.id)
+        .slice(0, 30)
+        .map(n => ({ createdAt: n.createdAt, text: n.text, tags: n.tags, author: n.author }));
+      // Strip the file URL/path; only send the AI-relevant fields plus extracted text
+      const trimmedDocs = (state.documents || [])
+        .filter(d => d.projectId === project.id)
+        .slice(0, 20)
+        .map(d => ({
+          title: d.title,
+          fileName: d.fileName,
+          fileType: d.fileType,
+          tags: d.tags,
+          notes: d.notes,
+          extractedText: d.extractedText,
+          uploader: d.uploader,
+          createdAt: d.createdAt,
         }));
       const response = await fetch("/.netlify/functions/project-qa", {
         method: "POST",
@@ -2536,9 +2682,13 @@ function ProjectAI({ state, project }) {
             jobNumber: project.jobNumber,
             client: project.client,
             location: project.location,
+            projectType: project.projectType,
             tasks: getNormalizedTasks(project)
           },
-          dailyReports: trimmedReports
+          dailyReports: trimmedReports,
+          weeklyReports: trimmedWeeklies,
+          quickNotes: trimmedNotes,
+          documents: trimmedDocs
         })
       });
 
@@ -2867,8 +3017,9 @@ function Dashboard({ state, dispatch }) {
       }}>
         <div style={{ position: "absolute", top: 0, right: 0, width: "200px", height: "100%", background: T.orange[500], opacity: 0.08, transform: "skewX(-20deg) translateX(40px)" }} />
         <div style={{ position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", flexWrap: "wrap" }}>
             <Badge color="orange">JOB #{project.jobNumber}</Badge>
+            <ProjectTypeBadge type={project.projectType} />
             <Badge color="navy">{project.client}</Badge>
           </div>
           <h1 style={{ fontSize: "clamp(20px, 3vw, 28px)", fontWeight: 800, color: T.white, marginBottom: "4px", letterSpacing: "-0.02em" }}>
@@ -3921,18 +4072,81 @@ function ProjectLogoUpload({ project, dispatch }) {
   );
 }
 
+// ─── Project Type Selector & Badge ───────────────────────────
+function ProjectTypeSelector({ value, onChange }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+      {Object.values(PROJECT_TYPES).map(t => {
+        const active = value === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onChange(t.id)}
+            style={{
+              padding: "14px 16px",
+              borderRadius: T.radius.md,
+              border: active ? `2px solid ${T.orange[500]}` : `1.5px solid ${T.neutral[200]}`,
+              background: active ? T.orange[100] : T.white,
+              cursor: "pointer",
+              textAlign: "left",
+              transition: "all 0.15s",
+            }}
+          >
+            <div style={{ fontSize: "14px", fontWeight: 700, color: active ? T.orange[600] : T.navy[800], marginBottom: "2px" }}>
+              {t.label}
+            </div>
+            <div style={{ fontSize: "11px", fontWeight: 700, color: active ? T.orange[600] : T.neutral[500], letterSpacing: "0.08em" }}>
+              {t.short}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProjectTypeBadge({ type, size = "md" }) {
+  const t = PROJECT_TYPES[type] || PROJECT_TYPES.GC;
+  const isCM = t.id === "CM";
+  const padding = size === "sm" ? "2px 8px" : "3px 10px";
+  const fontSize = size === "sm" ? "10px" : "11px";
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "4px",
+      padding, fontSize, fontWeight: 700, letterSpacing: "0.06em",
+      borderRadius: "999px", textTransform: "uppercase",
+      background: isCM ? T.navy[700] : T.orange[100],
+      color: isCM ? T.white : T.orange[600],
+      border: `1px solid ${isCM ? T.navy[700] : T.orange[400]}`,
+    }} title={t.label}>
+      {t.short}
+    </span>
+  );
+}
+
 // ─── Project Setup Component ─────────────────────────────────
 function ProjectSetup({ state, dispatch }) {
   const project = getActiveProject(state);
   if (!project) return <ProjectsList state={state} dispatch={dispatch} />;
+  const isCM = (project.projectType || "GC") === "CM";
   return (
     <div className="fade-in" style={{ maxWidth: "860px" }}>
-      <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], marginBottom: "24px", letterSpacing: "-0.02em" }}>
-        Project Setup
-      </h2>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px" }}>
+        <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>
+          Project Setup
+        </h2>
+        <ProjectTypeBadge type={project.projectType} />
+      </div>
 
       <Card style={{ marginBottom: "20px" }}>
         <SectionTitle icon={Building2}>Job Information</SectionTitle>
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{ fontSize: "11px", fontWeight: 700, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "8px" }}>
+            Project Type
+          </label>
+          <ProjectTypeSelector value={project.projectType || "GC"} onChange={v => dispatch({ type: "SET_PROJECT", data: { projectType: v } })} />
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "16px" }}>
           <Input label="Job Number" value={project.jobNumber} onChange={e => dispatch({ type: "SET_PROJECT", data: { jobNumber: e.target.value } })} />
           <Input label="Job Name" value={project.jobName} onChange={e => dispatch({ type: "SET_PROJECT", data: { jobName: e.target.value } })} />
@@ -3965,6 +4179,7 @@ function ProjectSetup({ state, dispatch }) {
         </Card>
       )}
 
+      {!isCM && (
       <Card style={{ marginBottom: "20px" }}>
         <SectionTitle icon={Truck} action={
           <div style={{ display: "flex", gap: "8px" }}>
@@ -4010,6 +4225,7 @@ function ProjectSetup({ state, dispatch }) {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }
@@ -4087,6 +4303,8 @@ function DailyEntry({ state, dispatch }) {
   const recognitionRef = useRef(null);
   const [uploadProgress, setUploadProgress] = useState(null); // { done: N, total: N, photos: [{status}] } or null
   const uploadCancelledRef = useRef(false);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [addingRole, setAddingRole] = useState(false);
 
   // Cleanup speech recognition on unmount
   useEffect(() => {
@@ -4390,8 +4608,7 @@ function DailyEntry({ state, dispatch }) {
   const customRoles = report.customRoles || [];
   const totalMen = workforceRoles.reduce((sum, r) => sum + (report.workforce[r.key]?.men || 0), 0) + customRoles.reduce((sum, r) => sum + (r.men || 0), 0);
   const totalHours = workforceRoles.reduce((sum, r) => sum + ((report.workforce[r.key]?.men || 0) * (report.workforce[r.key]?.hours || 0)), 0) + customRoles.reduce((sum, r) => sum + ((r.men || 0) * (r.hours || 0)), 0);
-  const [newRoleName, setNewRoleName] = React.useState("");
-  const [addingRole, setAddingRole] = React.useState(false);
+  const isCM = (project?.projectType || "GC") === "CM";
 
   const addCustomRole = () => {
     if (newRoleName.trim()) {
@@ -4414,7 +4631,10 @@ function DailyEntry({ state, dispatch }) {
     <div className="fade-in" style={{ maxWidth: "900px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
         <div>
-          <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Daily Report Entry</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+            <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Daily Report Entry</h2>
+            <ProjectTypeBadge type={project.projectType} />
+          </div>
           <p style={{ fontSize: "13px", color: T.neutral[500] }}>JOB #{project.jobNumber} &middot; {project.jobName}</p>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
@@ -4449,12 +4669,14 @@ function DailyEntry({ state, dispatch }) {
           <Input label="Temperature" value={report.temperature || ""} onChange={e => update({ temperature: e.target.value })} placeholder="e.g. 72°F" />
           <Input label="Rainfall (in)" value={report.rainfall || ""} onChange={e => update({ rainfall: e.target.value })} placeholder="e.g. 0.25" />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "16px" }}>
-          <Select label="Shift" value={report.shift.type} onChange={e => update({ shift: { ...report.shift, type: e.target.value } })}
-            options={[{ value: "Day", label: "Day" }, { value: "Night", label: "Night" }, { value: "Day + Night", label: "Day + Night" }]}
-          />
-          <Input label="Shift Hours" value={report.shift.hours} onChange={e => updateShiftHours(e.target.value)} placeholder="8" />
-        </div>
+        {!isCM && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "16px" }}>
+            <Select label="Shift" value={report.shift.type} onChange={e => update({ shift: { ...report.shift, type: e.target.value } })}
+              options={[{ value: "Day", label: "Day" }, { value: "Night", label: "Night" }, { value: "Day + Night", label: "Day + Night" }]}
+            />
+            <Input label="Shift Hours" value={report.shift.hours} onChange={e => updateShiftHours(e.target.value)} placeholder="8" />
+          </div>
+        )}
       </Card>
 
       <Card style={{ marginBottom: "16px" }}>
@@ -4465,6 +4687,7 @@ function DailyEntry({ state, dispatch }) {
         <FieldTools fieldKey="generalNotes" />
       </Card>
 
+      {!isCM && (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card>
           <SectionTitle icon={Users}>Daily Workforce</SectionTitle>
@@ -4720,7 +4943,9 @@ function DailyEntry({ state, dispatch }) {
           {project.equipmentRented.length === 0 && <div style={{ fontSize: "12px", color: T.neutral[400], padding: "4px 0" }}>No rented equipment. Click "+ Rented" to add.</div>}
         </Card>
       </div>
+      )}
 
+      {!isCM && (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card>
           <TextArea label="Third Party Utilities" value={report.thirdPartyUtilities}
@@ -4736,6 +4961,15 @@ function DailyEntry({ state, dispatch }) {
           <FieldTools fieldKey="materialDeliveries" />
         </Card>
       </div>
+      )}
+      {isCM ? (
+        <Card style={{ marginBottom: "16px" }}>
+          <TextArea label="Delays / Problems" value={report.delaysProblems}
+            onChange={e => update({ delaysProblems: e.target.value })} placeholder="Document any delays or problems..."
+          />
+          <FieldTools fieldKey="delaysProblems" />
+        </Card>
+      ) : (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card>
           <TextArea label="Delays / Problems" value={report.delaysProblems}
@@ -4750,6 +4984,7 @@ function DailyEntry({ state, dispatch }) {
           <FieldTools fieldKey="extraWork" />
         </Card>
       </div>
+      )}
 
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={CheckCircle2}>Task Status Check-In</SectionTitle>
@@ -4814,12 +5049,14 @@ function DailyEntry({ state, dispatch }) {
         </div>
       </Card>
 
-      <TaskHoursEntry
-        tasks={getNormalizedTasks(project)}
-        taskHours={report.taskHours || []}
-        reportDate={report.date}
-        dispatch={dispatch}
-      />
+      {!isCM && (
+        <TaskHoursEntry
+          tasks={getNormalizedTasks(project)}
+          taskHours={report.taskHours || []}
+          reportDate={report.date}
+          dispatch={dispatch}
+        />
+      )}
 
       <Card style={{ marginBottom: "16px" }}>
         <SectionTitle icon={Camera}>Progress Photos</SectionTitle>
@@ -5010,6 +5247,7 @@ function DailyView({ state, dispatch }) {
 
   if (!report || !project) return null;
 
+  const isCM = (project.projectType || "GC") === "CM";
   const allEquip = [...project.equipmentOwned.map(e => ({ ...e, type: "Owned" })), ...project.equipmentRented.map(e => ({ ...e, type: "Rented" }))];
   const presentEquip = allEquip.filter(e => report.equipmentPresent.includes(e.id));
 
@@ -5054,7 +5292,7 @@ function DailyView({ state, dispatch }) {
             </div>
             {report.rainfall && <div style={{ fontSize: "13px", color: T.navy[400] }}>Rainfall: {report.rainfall} in</div>}
             <div style={{ fontSize: "18px", fontWeight: 700, marginTop: "4px" }}>{fmtDate(report.date)}</div>
-            <div style={{ fontSize: "13px", color: T.navy[400] }}>Shift: {report.shift.hours} {report.shift.type}</div>
+            {!isCM && <div style={{ fontSize: "13px", color: T.navy[400] }}>Shift: {report.shift.hours} {report.shift.type}</div>}
           </div>
         </div>
       </Card>
@@ -5064,6 +5302,7 @@ function DailyView({ state, dispatch }) {
         <p style={{ fontSize: "14px", lineHeight: 1.7, color: T.navy[700] }}>{report.generalNotes || "No notes recorded."}</p>
       </Card>
 
+      {!isCM && (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card padding="0" style={{ overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", background: T.navy[800], color: T.white, fontWeight: 700, fontSize: "13px" }}>Daily Workforce</div>
@@ -5130,7 +5369,14 @@ function DailyView({ state, dispatch }) {
           </div>
         </Card>
       </div>
+      )}
 
+      {isCM ? (
+        <Card style={{ marginBottom: "16px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: report.delaysProblems ? T.red[500] : T.orange[500], textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>Delays / Problems</div>
+          <p style={{ fontSize: "13px", color: report.delaysProblems ? T.navy[700] : T.neutral[400], lineHeight: 1.6 }}>{report.delaysProblems || "None"}</p>
+        </Card>
+      ) : (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         {[
           { label: "Third Party Utilities", value: report.thirdPartyUtilities },
@@ -5144,6 +5390,7 @@ function DailyView({ state, dispatch }) {
           </Card>
         ))}
       </div>
+      )}
 
       {/* Task Status Section */}
       <Card style={{ marginBottom: "16px" }}>
@@ -5277,6 +5524,8 @@ function WeeklyGenerator({ state, dispatch }) {
   const project = getActiveProject(state);
 
   const [genWeek, setGenWeek] = useState(() => getWeekEnding(new Date()));
+  const [aiSummarizing, setAiSummarizing] = useState(false);
+  const [aiError, setAiError] = useState(null);
 
   const projectDailies = state.dailyReports.filter(r => r.projectId === project?.id);
   const genAvailableWeeks = useMemo(() => {
@@ -5299,6 +5548,7 @@ function WeeklyGenerator({ state, dispatch }) {
         importantDates: "", ownerDeliveryDates: "", outstandingOwnerItems: "",
         upcomingInspections: "", hindrances: agg.delays, additionalDelays: "",
         nextOACMeeting: "", selectedPhotos: agg.allPhotos,
+        meetingOutcomes: [""], outstandingItems: [""],
       }});
     };
 
@@ -5339,11 +5589,72 @@ function WeeklyGenerator({ state, dispatch }) {
     />
   );
 
+  const isCM = (project?.projectType || "GC") === "CM";
+
+  // Dailies + quick notes inside the editor's week — used by the AI summarize button.
+  const editorWeekDailies = state.dailyReports.filter(r => r.projectId === project?.id && getWeekEnding(r.date) === weekly.weekEnding);
+  const editorWeekNotes = (state.quickNotes || []).filter(n => {
+    if (n.projectId !== project?.id || !n.createdAt) return false;
+    const noteDate = n.createdAt.slice(0, 10);
+    return getWeekEnding(noteDate) === weekly.weekEnding;
+  });
+
+  const handleAISummarize = async () => {
+    if (editorWeekDailies.length === 0) {
+      setAiError("No daily reports for this week to summarize.");
+      return;
+    }
+    if (!confirm(`Replace the current weekly fields with an AI-generated draft from ${editorWeekDailies.length} daily report${editorWeekDailies.length !== 1 ? "s" : ""}${editorWeekNotes.length > 0 ? ` and ${editorWeekNotes.length} quick note${editorWeekNotes.length !== 1 ? "s" : ""}` : ""}?`)) return;
+    setAiSummarizing(true);
+    setAiError(null);
+    try {
+      const trimmedDailies = editorWeekDailies.map(r => ({
+        date: r.date, day: r.day, weather: r.weather, temperature: r.temperature, rainfall: r.rainfall,
+        shift: r.shift, generalNotes: r.generalNotes, incidents: r.incidents,
+        delaysProblems: r.delaysProblems, extraWork: r.extraWork,
+        materialDeliveries: r.materialDeliveries, thirdPartyUtilities: r.thirdPartyUtilities,
+        workforce: r.workforce, completedTasks: r.completedTasks
+      }));
+      const trimmedNotes = editorWeekNotes.map(n => ({ createdAt: n.createdAt, text: n.text, tags: n.tags, author: n.author }));
+      const response = await fetch("/.netlify/functions/summarize-week", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: { jobName: project.jobName, jobNumber: project.jobNumber, client: project.client, projectType: project.projectType, tasks: getNormalizedTasks(project) },
+          weekEnding: weekly.weekEnding,
+          dailyReports: trimmedDailies,
+          quickNotes: trimmedNotes,
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || `API error ${response.status}`);
+      }
+      const data = await response.json();
+      const draft = data.draft || {};
+      // Merge non-empty fields into the editor; preserve any photos/schedule the user already attached.
+      const merged = { ...weekly };
+      const arrFields = ["ongoingCompleted", "lookAhead", "meetingOutcomes", "outstandingItems"];
+      const strFields = ["outstandingRFIs", "hotSubmittals", "safety", "importantDates", "ownerDeliveryDates", "outstandingOwnerItems", "upcomingInspections", "hindrances", "nextOACMeeting"];
+      arrFields.forEach(f => { if (Array.isArray(draft[f]) && draft[f].length > 0) merged[f] = draft[f]; });
+      strFields.forEach(f => { if (typeof draft[f] === "string" && draft[f].trim()) merged[f] = draft[f]; });
+      dispatch({ type: "SET_EDITING_WEEKLY", data: merged });
+    } catch (err) {
+      console.error("AI summarize failed:", err);
+      setAiError(err.message || "Failed to generate AI draft");
+    } finally {
+      setAiSummarizing(false);
+    }
+  };
+
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
         <div>
-          <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Weekly Report</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+            <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Weekly Report</h2>
+            <ProjectTypeBadge type={project?.projectType} />
+          </div>
           <p style={{ fontSize: "13px", color: T.neutral[500] }}>Week ending {fmtDateShort(weekly.weekEnding)} &middot; {project.client}</p>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
@@ -5352,6 +5663,27 @@ function WeeklyGenerator({ state, dispatch }) {
           <Btn icon={Save} onClick={() => dispatch({ type: "SAVE_WEEKLY" })}>Save</Btn>
         </div>
       </div>
+
+      <Card style={{ marginBottom: "16px", background: `linear-gradient(135deg, ${T.orange[100]}, ${T.neutral[50]})`, border: `1px solid ${T.orange[400]}` }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: "240px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+              <Sparkles size={16} style={{ color: T.orange[600] }} />
+              <span style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800] }}>Summarize this week with AI</span>
+            </div>
+            <p style={{ fontSize: "12px", color: T.neutral[600], lineHeight: 1.5 }}>
+              {editorWeekDailies.length} daily{editorWeekDailies.length !== 1 ? " reports" : " report"}{editorWeekNotes.length > 0 ? ` and ${editorWeekNotes.length} quick note${editorWeekNotes.length !== 1 ? "s" : ""}` : ""} for this week. AI will rewrite all fields below — your edits will be replaced.
+            </p>
+            {aiError && <div style={{ fontSize: "12px", color: T.red[500], marginTop: "6px", fontWeight: 600 }}>{aiError}</div>}
+          </div>
+          <Btn variant="secondary" icon={aiSummarizing ? Loader2 : Sparkles} size="sm" onClick={handleAISummarize}
+            disabled={aiSummarizing || editorWeekDailies.length === 0}
+            style={aiSummarizing ? { animation: "spin 1s linear infinite" } : {}}
+          >
+            {aiSummarizing ? "Summarizing…" : "Summarize with AI"}
+          </Btn>
+        </div>
+      </Card>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card>
@@ -5367,6 +5699,17 @@ function WeeklyGenerator({ state, dispatch }) {
           </div>
         </Card>
       </div>
+
+      {isCM && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+          <Card>
+            <ListEditor label="Meeting Outcomes" field="meetingOutcomes" />
+          </Card>
+          <Card>
+            <ListEditor label="Outstanding Items" field="outstandingItems" />
+          </Card>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card>
@@ -5583,12 +5926,17 @@ function WeeklyView({ state, dispatch }) {
     </div>
   );
 
+  const isCM = (project?.projectType || "GC") === "CM";
+
   return (
     <div className="fade-in" style={{ maxWidth: "900px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" }}>
         <div>
           <Btn variant="ghost" icon={ArrowLeft} onClick={() => dispatch({ type: "SET_VIEW", view: "dashboard" })} style={{ marginBottom: "8px" }}>Back</Btn>
-          <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Weekly Report</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+            <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Weekly Report</h2>
+            <ProjectTypeBadge type={project?.projectType} />
+          </div>
           <p style={{ fontSize: "13px", color: T.neutral[500] }}>Week ending {fmtDateShort(weekly.weekEnding)} &middot; {project.jobName}</p>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
@@ -5608,6 +5956,17 @@ function WeeklyView({ state, dispatch }) {
           <ListDisplay label="Look Ahead Schedule" items={weekly.lookAhead} />
         </Card>
       </div>
+
+      {isCM && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+          <Card>
+            <ListDisplay label="Meeting Outcomes" items={weekly.meetingOutcomes} />
+          </Card>
+          <Card>
+            <ListDisplay label="Outstanding Items" items={weekly.outstandingItems} />
+          </Card>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         <Card><FieldDisplay label="Outstanding RFI's" value={weekly.outstandingRFIs} /></Card>
@@ -6133,7 +6492,7 @@ function PhotoGallery({ state, dispatch }) {
 // ═══════════════════════════════════════════════════════════════
 // CLIENT PORTAL — Read-only dashboard for project owners
 // ═══════════════════════════════════════════════════════════════
-function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
+function ClientPortal({ projectId, projects, dailyReports, weeklyReports, documents }) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
@@ -6142,6 +6501,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
   const project = projects.find(p => p.id === projectId);
   const projectDailies = dailyReports.filter(r => r.projectId === projectId).sort((a, b) => new Date(b.date) - new Date(a.date));
   const projectWeeklies = weeklyReports.filter(r => r.projectId === projectId).sort((a, b) => new Date(b.weekEnding) - new Date(a.weekEnding));
+  const projectDocs = (documents || []).filter(d => d.projectId === projectId).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
   if (!project) {
     return (
@@ -6176,18 +6536,45 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
     setAnswer("");
     try {
       const trimmedReports = projectDailies.slice(0, 15).map(r => ({
-        date: r.date, weather: r.weather, temperature: r.temperature, rainfall: r.rainfall,
-        shift: r.shift, generalNotes: r.generalNotes?.substring(0, 500) || "",
+        date: r.date, day: r.day, weather: r.weather, temperature: r.temperature, rainfall: r.rainfall,
+        shift: r.shift, generalNotes: r.generalNotes?.substring(0, 800) || "",
         incidents: r.incidents, delaysProblems: r.delaysProblems, extraWork: r.extraWork,
         materialDeliveries: r.materialDeliveries, workforce: r.workforce
+      }));
+      const trimmedWeeklies = projectWeeklies.slice(0, 8).map(w => ({
+        weekEnding: w.weekEnding,
+        ongoingCompleted: w.ongoingCompleted,
+        lookAhead: w.lookAhead,
+        outstandingRFIs: w.outstandingRFIs,
+        hotSubmittals: w.hotSubmittals,
+        safety: w.safety,
+        outstandingOwnerItems: w.outstandingOwnerItems,
+        upcomingInspections: w.upcomingInspections,
+        hindrances: w.hindrances,
+        nextOACMeeting: w.nextOACMeeting,
+        meetingOutcomes: w.meetingOutcomes,
+        outstandingItems: w.outstandingItems,
+      }));
+      // Client Portal: include documents (typically shared with client) but NOT quick notes (internal field captures).
+      const trimmedDocs = projectDocs.slice(0, 20).map(d => ({
+        title: d.title,
+        fileName: d.fileName,
+        fileType: d.fileType,
+        tags: d.tags,
+        notes: d.notes,
+        extractedText: d.extractedText,
+        uploader: d.uploader,
+        createdAt: d.createdAt,
       }));
       const response = await fetch("/.netlify/functions/project-qa", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: question.trim(),
-          project: { jobName: project.jobName, jobNumber: project.jobNumber, client: project.client, tasks: getNormalizedTasks(project) },
-          dailyReports: trimmedReports
+          project: { jobName: project.jobName, jobNumber: project.jobNumber, client: project.client, projectType: project.projectType, tasks: getNormalizedTasks(project) },
+          dailyReports: trimmedReports,
+          weeklyReports: trimmedWeeklies,
+          documents: trimmedDocs
         })
       });
       const data = await response.json();
@@ -6264,6 +6651,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
               <span style={{ background: T.orange[500], color: T.white, padding: "4px 12px", borderRadius: "20px", fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                 Client Portal
               </span>
+              <ProjectTypeBadge type={project.projectType} />
               <span style={{ color: T.navy[400], fontSize: "13px" }}>JOB #{project.jobNumber}</span>
             </div>
             <h1 className="cp-header-title" style={{ fontSize: "28px", fontWeight: 800, color: T.white, letterSpacing: "-0.02em" }}>{project.jobName}</h1>
@@ -6271,7 +6659,7 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
           </div>
           <div style={{ textAlign: "right", flexShrink: 0 }}>
             <div style={{ fontSize: "12px", color: T.navy[400], marginBottom: "4px" }}>Powered by</div>
-            <div style={{ fontSize: "24px", fontWeight: 700, color: T.white, fontFamily: "Georgia, serif" }}>BIC</div>
+            <div style={{ fontSize: "24px", fontWeight: 700, color: T.white, fontFamily: "Georgia, serif" }}>4J</div>
           </div>
         </div>
       </div>
@@ -6762,9 +7150,623 @@ function ClientPortal({ projectId, projects, dailyReports, weeklyReports }) {
 
       {/* Footer */}
       <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", padding: "20px 32px", textAlign: "center" }}>
-        <p style={{ fontSize: "12px", color: T.navy[500] }}>Blue Iron Corp. | Ca. License #65233 | Powered by BIC Field Reporter</p>
+        <p style={{ fontSize: "12px", color: T.navy[500] }}>Powered by 4J Field Reporter</p>
       </div>
     </div>
+  );
+}
+
+// ─── Project Documents ───────────────────────────────────────
+function DocumentTagInput({ tags, onChange }) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const t = input.trim().replace(/^#/, "");
+    if (!t) return;
+    if (!tags.includes(t)) onChange([...tags, t]);
+    setInput("");
+  };
+  const remove = (t) => onChange(tags.filter(x => x !== t));
+  return (
+    <div>
+      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "6px" }}>
+        {tags.map(t => (
+          <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 600, color: T.orange[600], background: T.orange[100], padding: "2px 4px 2px 10px", borderRadius: "12px" }}>
+            #{t}
+            <button onClick={() => remove(t)} aria-label={`Remove tag ${t}`}
+              style={{ background: "transparent", border: "none", cursor: "pointer", color: T.orange[600], padding: "0 2px", display: "inline-flex", alignItems: "center" }}>
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+      </div>
+      <input value={input} onChange={e => setInput(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); }
+          else if (e.key === "Backspace" && !input && tags.length > 0) onChange(tags.slice(0, -1));
+        }}
+        onBlur={() => { if (input.trim()) add(); }}
+        placeholder="Add tag and press Enter…"
+        style={{ width: "100%", padding: "6px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "12px", outline: "none" }}
+      />
+    </div>
+  );
+}
+
+function DocumentsView({ state, dispatch }) {
+  const project = getActiveProject(state);
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(null); // { name, progress: 'uploading'|'extracting'|'done'|'error', error? }
+  const [search, setSearch] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
+  const [expanded, setExpanded] = useState(null); // doc id currently open for editing details
+
+  if (!project) {
+    return (
+      <div className="fade-in">
+        <EmptyState icon={Folder} title="No project selected"
+          description="Select a project to view its documents."
+        />
+      </div>
+    );
+  }
+
+  const projectDocs = (state.documents || []).filter(d => d.projectId === project.id);
+  const allTags = [...new Set(projectDocs.flatMap(d => d.tags || []))].sort();
+  const filteredDocs = projectDocs.filter(d => {
+    if (search) {
+      const q = search.toLowerCase();
+      const hay = `${d.title || ""} ${d.fileName || ""} ${(d.tags || []).join(" ")} ${d.notes || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (tagFilter && !(d.tags || []).includes(tagFilter)) return false;
+    return true;
+  });
+
+  const fmtDateTime = (iso) => {
+    if (!iso) return "";
+    const dt = new Date(iso);
+    return dt.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+  const fmtSize = (bytes) => {
+    if (!bytes) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+  const docIcon = (type) => {
+    if (!type) return FileText;
+    if (type.startsWith("image/")) return Image;
+    if (type === "application/pdf") return FileText;
+    return FileType;
+  };
+
+  const handleFiles = async (files) => {
+    for (const file of Array.from(files)) {
+      const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      setUploading({ name: file.name, progress: "uploading" });
+      try {
+        const { url, path } = await uploadDocument(file, project.id, docId);
+        let extractedText = "";
+        if (file.type === "application/pdf") {
+          setUploading({ name: file.name, progress: "extracting" });
+          extractedText = await pdfToText(file);
+        }
+        const doc = {
+          id: docId,
+          projectId: project.id,
+          title: file.name.replace(/\.[^/.]+$/, ""),
+          fileUrl: url,
+          filePath: path,
+          fileName: file.name,
+          fileType: file.type || "",
+          fileSize: file.size || 0,
+          tags: [],
+          notes: "",
+          extractedText,
+          uploader: project.preparedBy || "",
+          createdAt: new Date().toISOString(),
+        };
+        dispatch({ type: "ADD_DOCUMENT", doc });
+        setUploading({ name: file.name, progress: "done" });
+      } catch (err) {
+        console.error("Document upload failed:", err);
+        setUploading({ name: file.name, progress: "error", error: err.message });
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    setTimeout(() => setUploading(null), 1200);
+  };
+
+  return (
+    <div className="fade-in" style={{ maxWidth: "860px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", flexWrap: "wrap", gap: "12px" }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+            <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Documents</h2>
+            <ProjectTypeBadge type={project.projectType} />
+          </div>
+          <p style={{ fontSize: "13px", color: T.neutral[500] }}>{projectDocs.length} document{projectDocs.length !== 1 ? "s" : ""} on {project.jobName || "this project"}</p>
+        </div>
+        <div>
+          <input ref={fileInputRef} type="file" multiple
+            accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.txt"
+            onChange={(e) => { const files = e.target.files; e.target.value = ""; if (files?.length) handleFiles(files); }}
+            style={{ display: "none" }}
+          />
+          <Btn icon={Upload} onClick={() => fileInputRef.current?.click()} disabled={!!uploading && uploading.progress !== "done" && uploading.progress !== "error"}>
+            Upload Document
+          </Btn>
+        </div>
+      </div>
+
+      {uploading && (
+        <Card style={{ marginBottom: "16px", borderLeft: `4px solid ${uploading.progress === "error" ? T.red[500] : T.orange[500]}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            {uploading.progress === "uploading" && <Loader2 size={18} style={{ color: T.orange[500], animation: "spin 1s linear infinite" }} />}
+            {uploading.progress === "extracting" && <Sparkles size={18} style={{ color: T.orange[500] }} />}
+            {uploading.progress === "done" && <Check size={18} style={{ color: T.green[500] }} />}
+            {uploading.progress === "error" && <TriangleAlert size={18} style={{ color: T.red[500] }} />}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: T.navy[800] }}>{uploading.name}</div>
+              <div style={{ fontSize: "11px", color: T.neutral[500] }}>
+                {uploading.progress === "uploading" && "Uploading…"}
+                {uploading.progress === "extracting" && "Extracting text from PDF…"}
+                {uploading.progress === "done" && "Uploaded"}
+                {uploading.progress === "error" && (uploading.error || "Failed")}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <Card style={{ marginBottom: "16px" }}>
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: "200px", position: "relative" }}>
+            <Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: T.neutral[400] }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search title, filename, tags, notes…"
+              style={{ width: "100%", padding: "8px 10px 8px 32px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, fontSize: "13px", outline: "none" }}
+            />
+          </div>
+          {allTags.length > 0 && (
+            <select value={tagFilter} onChange={e => setTagFilter(e.target.value)}
+              style={{ padding: "8px 12px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, fontSize: "13px", color: T.navy[700], background: T.white, cursor: "pointer" }}
+            >
+              <option value="">All tags</option>
+              {allTags.map(t => <option key={t} value={t}>#{t}</option>)}
+            </select>
+          )}
+        </div>
+      </Card>
+
+      {filteredDocs.length === 0 ? (
+        <EmptyState icon={Folder} title={projectDocs.length === 0 ? "No documents yet" : "No matches"}
+          description={projectDocs.length === 0 ? "Upload change orders, RFIs, plans, or any reference docs. PDF text gets extracted so the AI can read it." : "Try clearing the filters."}
+          action={projectDocs.length === 0 ? <Btn icon={Upload} onClick={() => fileInputRef.current?.click()}>Upload Document</Btn> : null}
+        />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {filteredDocs.map(d => {
+            const Icon = docIcon(d.fileType);
+            const isImage = (d.fileType || "").startsWith("image/");
+            const isOpen = expanded === d.id;
+            return (
+              <Card key={d.id} padding="0" style={{ overflow: "hidden", border: `1px solid ${T.neutral[200]}` }}>
+                <div style={{ display: "flex", alignItems: "stretch" }}>
+                  <div style={{ width: "5px", background: isOpen ? T.orange[500] : T.neutral[300] }} />
+                  <div style={{ flex: 1, padding: "14px 18px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: isOpen ? "12px" : "0" }}>
+                      {isImage && d.fileUrl ? (
+                        <img src={d.fileUrl} alt={d.title} style={{ width: "48px", height: "48px", objectFit: "cover", borderRadius: T.radius.sm, flexShrink: 0 }} />
+                      ) : (
+                        <div style={{ width: "48px", height: "48px", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: T.radius.sm, background: T.neutral[100], color: T.navy[600], flexShrink: 0 }}>
+                          <Icon size={22} />
+                        </div>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "15px", fontWeight: 700, color: T.navy[800], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.title || d.fileName || "Untitled"}</div>
+                        <div style={{ fontSize: "11px", color: T.neutral[500] }}>
+                          {d.fileName} · {fmtSize(d.fileSize)} · {fmtDateTime(d.createdAt)}{d.uploader ? ` · ${d.uploader}` : ""}
+                        </div>
+                        {(d.tags || []).length > 0 && (
+                          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "4px" }}>
+                            {d.tags.map(t => (
+                              <span key={t} style={{ fontSize: "10px", fontWeight: 600, color: T.orange[600], background: T.orange[100], padding: "1px 7px", borderRadius: "10px" }}>#{t}</span>
+                            ))}
+                          </div>
+                        )}
+                        {d.extractedText && (
+                          <div style={{ marginTop: "4px", fontSize: "10px", color: T.green[600], display: "inline-flex", alignItems: "center", gap: "4px", fontWeight: 600 }}>
+                            <Sparkles size={11} /> AI-readable ({d.extractedText.length.toLocaleString()} chars)
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
+                        {d.fileUrl && (
+                          <a href={d.fileUrl} target="_blank" rel="noopener noreferrer"
+                            style={{ padding: "6px", color: T.neutral[500], borderRadius: "6px", display: "inline-flex" }}
+                            onMouseEnter={e => { e.currentTarget.style.background = T.neutral[100]; e.currentTarget.style.color = T.orange[600]; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.neutral[500]; }}
+                            title="Open in new tab"
+                          >
+                            <ExternalLink size={16} />
+                          </a>
+                        )}
+                        <button onClick={() => setExpanded(isOpen ? null : d.id)}
+                          style={{ padding: "6px", background: "transparent", border: "none", cursor: "pointer", color: T.neutral[500], borderRadius: "6px" }}
+                          onMouseEnter={e => { e.currentTarget.style.background = T.neutral[100]; e.currentTarget.style.color = T.orange[600]; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.neutral[500]; }}
+                          title={isOpen ? "Close details" : "Edit details"}
+                        >
+                          <Edit3 size={16} />
+                        </button>
+                        <button onClick={() => { if (confirm(`Delete "${d.title || d.fileName}"? This cannot be undone.`)) dispatch({ type: "DELETE_DOCUMENT", id: d.id }); }}
+                          style={{ padding: "6px", background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400], borderRadius: "6px" }}
+                          onMouseEnter={e => { e.currentTarget.style.background = T.red[100]; e.currentTarget.style.color = T.red[500]; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.neutral[400]; }}
+                          title="Delete document"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {isOpen && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "12px", paddingTop: "12px", borderTop: `1px solid ${T.neutral[100]}` }}>
+                        <Input label="Title" value={d.title || ""} onChange={e => dispatch({ type: "UPDATE_DOCUMENT", id: d.id, data: { title: e.target.value } })} />
+                        <div>
+                          <label style={{ fontSize: "11px", fontWeight: 700, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "6px" }}>Tags</label>
+                          <DocumentTagInput tags={d.tags || []} onChange={tags => dispatch({ type: "UPDATE_DOCUMENT", id: d.id, data: { tags } })} />
+                        </div>
+                        <TextArea label="Notes" value={d.notes || ""} onChange={e => dispatch({ type: "UPDATE_DOCUMENT", id: d.id, data: { notes: e.target.value } })} placeholder="Optional notes about this document…" />
+                        {d.fileType === "application/pdf" && !d.extractedText && (
+                          <Btn variant="secondary" icon={Sparkles} size="sm"
+                            onClick={async () => {
+                              if (!d.fileUrl) return;
+                              const text = await pdfToText(d.fileUrl);
+                              dispatch({ type: "UPDATE_DOCUMENT", id: d.id, data: { extractedText: text } });
+                            }}
+                          >Re-extract Text</Btn>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Quick Notes ─────────────────────────────────────────────
+function QuickNotesView({ state, dispatch }) {
+  const project = getActiveProject(state);
+  const [search, setSearch] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
+
+  if (!project) {
+    return (
+      <div className="fade-in">
+        <EmptyState icon={StickyNote} title="No project selected"
+          description="Select a project to view its notes."
+        />
+      </div>
+    );
+  }
+
+  const projectNotes = (state.quickNotes || []).filter(n => n.projectId === project.id);
+  const allTags = [...new Set(projectNotes.flatMap(n => n.tags || []))].sort();
+  const filteredNotes = projectNotes.filter(n => {
+    if (search && !((n.text || "").toLowerCase().includes(search.toLowerCase()) || (n.tags || []).some(t => t.toLowerCase().includes(search.toLowerCase())))) return false;
+    if (tagFilter && !(n.tags || []).includes(tagFilter)) return false;
+    return true;
+  });
+
+  const fmt = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  };
+
+  return (
+    <div className="fade-in" style={{ maxWidth: "860px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", flexWrap: "wrap", gap: "12px" }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+            <h2 style={{ fontSize: "22px", fontWeight: 800, color: T.navy[800], letterSpacing: "-0.02em" }}>Quick Notes</h2>
+            <ProjectTypeBadge type={project.projectType} />
+          </div>
+          <p style={{ fontSize: "13px", color: T.neutral[500] }}>{projectNotes.length} note{projectNotes.length !== 1 ? "s" : ""} on {project.jobName || "this project"}</p>
+        </div>
+        <Btn icon={Plus} onClick={() => dispatch({ type: "OPEN_NOTE_MODAL" })}>Add Note</Btn>
+      </div>
+
+      <Card style={{ marginBottom: "16px" }}>
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: "200px", position: "relative" }}>
+            <Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: T.neutral[400] }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search notes or tags…"
+              style={{ width: "100%", padding: "8px 10px 8px 32px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, fontSize: "13px", outline: "none" }}
+            />
+          </div>
+          {allTags.length > 0 && (
+            <select value={tagFilter} onChange={e => setTagFilter(e.target.value)}
+              style={{ padding: "8px 12px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.md, fontSize: "13px", color: T.navy[700], background: T.white, cursor: "pointer" }}
+            >
+              <option value="">All tags</option>
+              {allTags.map(t => <option key={t} value={t}>#{t}</option>)}
+            </select>
+          )}
+        </div>
+      </Card>
+
+      {filteredNotes.length === 0 ? (
+        <EmptyState icon={StickyNote} title={projectNotes.length === 0 ? "No notes yet" : "No matches"}
+          description={projectNotes.length === 0 ? "Tap + Add Note to capture an observation, meeting outcome, or anything you want to remember." : "Try clearing the filters."}
+          action={projectNotes.length === 0 ? <Btn icon={Plus} onClick={() => dispatch({ type: "OPEN_NOTE_MODAL" })}>Add Note</Btn> : null}
+        />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {filteredNotes.map(n => (
+            <Card key={n.id} padding="0" style={{
+              cursor: "pointer", overflow: "hidden", transition: "all 0.15s",
+              border: `1px solid ${T.neutral[200]}`,
+            }}
+              onClick={() => dispatch({ type: "OPEN_NOTE_MODAL", note: n })}
+              onMouseEnter={e => { e.currentTarget.style.boxShadow = T.shadow.md; e.currentTarget.style.borderColor = T.orange[400]; }}
+              onMouseLeave={e => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.borderColor = T.neutral[200]; }}
+            >
+              <div style={{ padding: "14px 18px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", marginBottom: "6px" }}>
+                  <div style={{ fontSize: "11px", color: T.neutral[500], fontWeight: 600 }}>{fmt(n.createdAt)}{n.author ? ` · ${n.author}` : ""}</div>
+                  {n.photoUrl && <Camera size={14} style={{ color: T.orange[500], flexShrink: 0 }} />}
+                </div>
+                <p style={{ fontSize: "14px", color: T.navy[800], lineHeight: 1.5, whiteSpace: "pre-wrap", margin: 0 }}>
+                  {n.text || <span style={{ fontStyle: "italic", color: T.neutral[400] }}>(empty)</span>}
+                </p>
+                {(n.tags || []).length > 0 && (
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "10px" }}>
+                    {n.tags.map(t => (
+                      <span key={t} style={{ fontSize: "10px", fontWeight: 600, color: T.orange[600], background: T.orange[100], padding: "2px 8px", borderRadius: "10px", letterSpacing: "0.04em" }}>
+                        #{t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuickNoteModal({ state, dispatch }) {
+  const note = state.editingNote;
+  const [isRecording, setIsRecording] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const recognitionRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+    };
+  }, []);
+
+  if (!note) return null;
+
+  const update = (data) => dispatch({ type: "UPDATE_EDITING_NOTE", data });
+  const close = () => dispatch({ type: "CLOSE_NOTE_MODAL" });
+
+  const addTag = () => {
+    const t = tagInput.trim().replace(/^#/, "");
+    if (!t) return;
+    const tags = note.tags || [];
+    if (!tags.includes(t)) update({ tags: [...tags, t] });
+    setTagInput("");
+  };
+  const removeTag = (t) => update({ tags: (note.tags || []).filter(x => x !== t) });
+
+  const handleVoice = () => {
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Voice recognition is not supported in this browser. Try Chrome."); return; }
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    recognitionRef.current = recognition;
+    let finalTranscript = "";
+    recognition.onresult = (event) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalTranscript += t + " ";
+        else interim = t;
+      }
+      const cur = note.text || "";
+      const sep = cur && !cur.endsWith(" ") && !cur.endsWith("\n") ? " " : "";
+      update({ text: cur.trimEnd() + sep + finalTranscript + interim });
+    };
+    recognition.onerror = (e) => {
+      console.error("Voice error:", e.error);
+      setIsRecording(false);
+      if (e.error === "not-allowed") alert("Microphone access denied.");
+    };
+    recognition.onend = () => setIsRecording(false);
+    recognition.start();
+    setIsRecording(true);
+  };
+
+  const handlePhotoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    try {
+      const { uploadPhoto } = await import('./db.js');
+      const result = await uploadPhoto(file, note.projectId, note.id);
+      update({ photoUrl: result.url, photoPath: result.path });
+    } catch (err) {
+      console.error('Photo upload failed:', err);
+      const reader = new FileReader();
+      reader.onload = (ev) => update({ photoUrl: ev.target.result, photoPath: null });
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSave = () => {
+    if (!(note.text || "").trim() && !note.photoUrl) {
+      if (!confirm("Save an empty note?")) return;
+    }
+    dispatch({ type: "SAVE_NOTE" });
+  };
+
+  const handleDelete = () => {
+    if (confirm("Delete this note? This cannot be undone.")) {
+      dispatch({ type: "DELETE_NOTE", id: note.id });
+    }
+  };
+
+  const fmt = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  };
+
+  return (
+    <div onClick={close} style={{
+      position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 1000,
+      display: "flex", alignItems: "flex-start", justifyContent: "center",
+      padding: "5vh 16px", overflowY: "auto",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: T.white, borderRadius: T.radius.lg, width: "100%", maxWidth: "560px",
+        boxShadow: T.shadow.lg, overflow: "hidden",
+      }}>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${T.neutral[200]}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: "16px", fontWeight: 800, color: T.navy[800] }}>{note._isNew ? "New Note" : "Edit Note"}</div>
+            <div style={{ fontSize: "11px", color: T.neutral[500], marginTop: "2px" }}>{fmt(note.createdAt)}</div>
+          </div>
+          <button onClick={close} aria-label="Close"
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: T.neutral[400], padding: "4px" }}>
+            <X size={20} />
+          </button>
+        </div>
+
+        <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+          <div>
+            <textarea value={note.text || ""} onChange={e => update({ text: e.target.value })}
+              autoFocus
+              placeholder="What's happening on site? Type or use voice…"
+              rows={5}
+              style={{
+                width: "100%", padding: "10px 12px", border: `1.5px solid ${T.neutral[200]}`,
+                borderRadius: T.radius.md, fontSize: "14px", lineHeight: 1.5, outline: "none",
+                resize: "vertical", fontFamily: "inherit",
+              }}
+            />
+            <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+              <Btn variant={isRecording ? "danger" : "secondary"} icon={isRecording ? MicOff : Mic} size="sm" onClick={handleVoice}>
+                {isRecording ? "Stop" : "Voice"}
+              </Btn>
+              <input type="file" accept="image/*" ref={fileInputRef} onChange={handlePhotoSelect} style={{ display: "none" }} />
+              <Btn variant="secondary" icon={Camera} size="sm" onClick={() => fileInputRef.current?.click()}>
+                {note.photoUrl ? "Replace Photo" : "Add Photo"}
+              </Btn>
+            </div>
+          </div>
+
+          {note.photoUrl && (
+            <div style={{ position: "relative", borderRadius: T.radius.md, overflow: "hidden", border: `1px solid ${T.neutral[200]}` }}>
+              <img src={note.photoUrl} alt="Note" style={{ width: "100%", maxHeight: "200px", objectFit: "cover", display: "block" }} />
+              <button onClick={() => update({ photoUrl: null, photoPath: null })}
+                style={{
+                  position: "absolute", top: "8px", right: "8px",
+                  background: "rgba(0,0,0,0.55)", border: "none", color: "white",
+                  width: "28px", height: "28px", borderRadius: "50%", cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}
+                aria-label="Remove photo"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          <div>
+            <label style={{ fontSize: "11px", fontWeight: 700, color: T.neutral[500], textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "6px" }}>Tags</label>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
+              {(note.tags || []).map(t => (
+                <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 600, color: T.orange[600], background: T.orange[100], padding: "3px 4px 3px 10px", borderRadius: "12px" }}>
+                  #{t}
+                  <button onClick={() => removeTag(t)} aria-label={`Remove tag ${t}`}
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: T.orange[600], padding: "0 2px", display: "inline-flex", alignItems: "center" }}>
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input value={tagInput} onChange={e => setTagInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(); }
+                else if (e.key === "Backspace" && !tagInput && (note.tags || []).length > 0) {
+                  removeTag(note.tags[note.tags.length - 1]);
+                }
+              }}
+              onBlur={() => { if (tagInput.trim()) addTag(); }}
+              placeholder="Add tag and press Enter…"
+              style={{ width: "100%", padding: "8px 10px", border: `1.5px solid ${T.neutral[200]}`, borderRadius: T.radius.sm, fontSize: "13px", outline: "none" }}
+            />
+          </div>
+
+          <Input label="Author" value={note.author || ""} onChange={e => update({ author: e.target.value })} placeholder="Your name (optional)" />
+        </div>
+
+        <div style={{ padding: "12px 20px", borderTop: `1px solid ${T.neutral[200]}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: T.neutral[50] }}>
+          {!note._isNew ? (
+            <Btn variant="ghost" icon={Trash2} size="sm" onClick={handleDelete} style={{ color: T.red[500] }}>Delete</Btn>
+          ) : <span />}
+          <div style={{ display: "flex", gap: "8px" }}>
+            <Btn variant="ghost" size="sm" onClick={close}>Cancel</Btn>
+            <Btn icon={Save} size="sm" onClick={handleSave}>Save</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FloatingAddNoteBtn({ dispatch, activeProjectId }) {
+  if (!activeProjectId) return null;
+  return (
+    <button onClick={() => dispatch({ type: "OPEN_NOTE_MODAL" })}
+      aria-label="Add quick note"
+      style={{
+        position: "fixed", bottom: "20px", right: "20px", zIndex: 90,
+        width: "56px", height: "56px", borderRadius: "28px",
+        background: T.orange[500], color: T.white, border: "none",
+        boxShadow: "0 6px 20px oklch(0% 0 0 / 0.25)", cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        transition: "transform 0.15s, box-shadow 0.15s",
+      }}
+      onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.05)"; e.currentTarget.style.boxShadow = "0 8px 28px oklch(0% 0 0 / 0.3)"; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 6px 20px oklch(0% 0 0 / 0.25)"; }}
+      title="Add quick note"
+    >
+      <StickyNote size={22} />
+    </button>
   );
 }
 
@@ -6805,17 +7807,19 @@ export default function App() {
         const localState = await loadAppState();
         if (localState) {
           console.log("Loaded from local storage");
-          dispatch({ type: "LOAD_DATA", projects: localState.projects || [], dailyReports: localState.dailyReports || [], weeklyReports: localState.weeklyReports || [] });
+          dispatch({ type: "LOAD_DATA", projects: localState.projects || [], dailyReports: localState.dailyReports || [], weeklyReports: localState.weeklyReports || [], quickNotes: localState.quickNotes || [], documents: localState.documents || [] });
         }
 
         // Then sync with Supabase if online
         if (isOnline()) {
           try {
-            const [projects, dailyReports, weeklyReports, customReports] = await Promise.all([
+            const [projects, dailyReports, weeklyReports, customReports, quickNotes, documents] = await Promise.all([
               loadProjects(),
               loadDailyReports(),
               loadWeeklyReports(),
               loadCustomReports(),
+              loadQuickNotes(),
+              loadDocuments(),
             ]);
 
             // Merge photos from local IndexedDB with Supabase records.
@@ -6861,7 +7865,7 @@ export default function App() {
               });
             }
 
-            dispatch({ type: "LOAD_DATA", projects, dailyReports, weeklyReports, customReports });
+            dispatch({ type: "LOAD_DATA", projects, dailyReports, weeklyReports, customReports, quickNotes, documents });
             console.log("Synced with Supabase (photos merged from local)");
           } catch (err) {
             console.error("Failed to sync with Supabase, using local data:", err);
@@ -6915,10 +7919,14 @@ export default function App() {
           else if (item.type === 'saveDailyReport') await saveDailyReport(item.data);
           else if (item.type === 'saveWeeklyReport') await saveWeeklyReport(item.data);
           else if (item.type === 'saveCustomReport') await saveCustomReport(item.data);
+          else if (item.type === 'saveQuickNote') await saveQuickNote(item.data);
+          else if (item.type === 'saveDocument') await saveDocument(item.data);
           else if (item.type === 'deleteProject') await deleteProject(item.data);
           else if (item.type === 'deleteDailyReport') await deleteDailyReport(item.data);
           else if (item.type === 'deleteWeeklyReport') await deleteWeeklyReport(item.data);
           else if (item.type === 'deleteCustomReport') await deleteCustomReport(item.data);
+          else if (item.type === 'deleteQuickNote') await deleteQuickNote(item.data);
+          else if (item.type === 'deleteDocument') await deleteDocument(item.data);
         } catch (err) {
           console.error("Failed to sync item:", item, err);
         }
@@ -7029,8 +8037,10 @@ export default function App() {
       projects: state.projects,
       dailyReports: state.dailyReports,
       weeklyReports: state.weeklyReports,
+      quickNotes: state.quickNotes,
+      documents: state.documents,
     }).catch(err => console.error("Failed to save to IndexedDB:", err));
-  }, [state.projects, state.dailyReports, state.weeklyReports, state.loading]);
+  }, [state.projects, state.dailyReports, state.weeklyReports, state.quickNotes, state.documents, state.loading]);
 
   // Watch for project changes — detect deletions first, then save updates
   useEffect(() => {
@@ -7113,6 +8123,69 @@ export default function App() {
     prevWeekliesRef.current = state.weeklyReports;
   }, [state.weeklyReports, state.loading]);
 
+  // Watch for quick note changes and save (online) or queue (offline)
+  const prevQuickNotesRef = useRef(null);
+  useEffect(() => {
+    if (!loadedRef.current || state.loading) return;
+    if (prevQuickNotesRef.current !== null) {
+      // Detect deletions BEFORE updating the ref
+      const deletedNotes = prevQuickNotesRef.current.filter(n => !state.quickNotes.find(sn => sn.id === n.id));
+      deletedNotes.forEach(async (n) => {
+        if (isOnline()) {
+          deleteQuickNote(n.id).catch(err => console.error("Failed to delete quick note:", err));
+        } else {
+          await addPendingSync({ type: 'deleteQuickNote', data: n.id });
+          setPendingSyncCount(c => c + 1);
+        }
+      });
+
+      // Then save changed/new quick notes
+      state.quickNotes.forEach(async (n) => {
+        const prev = prevQuickNotesRef.current?.find(pn => pn.id === n.id);
+        if (!prev || JSON.stringify(prev) !== JSON.stringify(n)) {
+          if (isOnline()) {
+            saveQuickNote(n).catch(err => console.error("Failed to save quick note:", err));
+          } else {
+            await addPendingSync({ type: 'saveQuickNote', data: n });
+            setPendingSyncCount(c => c + 1);
+          }
+        }
+      });
+    }
+    prevQuickNotesRef.current = state.quickNotes;
+  }, [state.quickNotes, state.loading]);
+
+  // Watch for document changes and save (online) or queue (offline)
+  const prevDocsRef = useRef(null);
+  useEffect(() => {
+    if (!loadedRef.current || state.loading) return;
+    if (prevDocsRef.current !== null) {
+      const deletedDocs = prevDocsRef.current.filter(d => !state.documents.find(sd => sd.id === d.id));
+      deletedDocs.forEach(async (d) => {
+        if (isOnline()) {
+          deleteDocument(d.id).catch(err => console.error("Failed to delete document:", err));
+          if (d.filePath) deleteDocumentFile(d.filePath).catch(err => console.error("Failed to delete document file:", err));
+        } else {
+          await addPendingSync({ type: 'deleteDocument', data: d.id });
+          setPendingSyncCount(c => c + 1);
+        }
+      });
+
+      state.documents.forEach(async (d) => {
+        const prev = prevDocsRef.current?.find(pd => pd.id === d.id);
+        if (!prev || JSON.stringify(prev) !== JSON.stringify(d)) {
+          if (isOnline()) {
+            saveDocument(d).catch(err => console.error("Failed to save document:", err));
+          } else {
+            await addPendingSync({ type: 'saveDocument', data: d });
+            setPendingSyncCount(c => c + 1);
+          }
+        }
+      });
+    }
+    prevDocsRef.current = state.documents;
+  }, [state.documents, state.loading]);
+
   // Watch for custom report changes and save (online) or queue (offline)
   const prevCustomsRef = useRef(null);
   useEffect(() => {
@@ -7189,6 +8262,8 @@ export default function App() {
       case "schedule": return <ScheduleView state={state} dispatch={dispatch} />;
       case "photos": return <PhotoGallery state={state} dispatch={dispatch} />;
       case "safety": return <SafetyMeetings state={state} dispatch={dispatch} />;
+      case "quickNotes": return <QuickNotesView state={state} dispatch={dispatch} />;
+      case "documents": return <DocumentsView state={state} dispatch={dispatch} />;
       default: return <Dashboard state={state} dispatch={dispatch} />;
     }
   };
@@ -7213,6 +8288,7 @@ export default function App() {
           projects={state.projects}
           dailyReports={state.dailyReports}
           weeklyReports={state.weeklyReports}
+          documents={state.documents}
         />
       </ErrorBoundary>
     );
@@ -7292,6 +8368,8 @@ export default function App() {
         <main id="main-content" className="main-content" style={{ marginLeft: "220px", padding: "32px", minHeight: "100vh", paddingBottom: (!online || pendingSyncCount > 0 || pendingPhotosCount > 0) ? "80px" : "32px" }} role="main">
           {renderView()}
         </main>
+        <FloatingAddNoteBtn dispatch={dispatch} activeProjectId={state.activeProjectId} />
+        <QuickNoteModal state={state} dispatch={dispatch} />
       </div>
     </ErrorBoundary>
   );

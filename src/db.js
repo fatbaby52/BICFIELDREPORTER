@@ -7,6 +7,7 @@ const toDbProject = (p) => ({
   job_name: p.jobName,
   client: p.client || '',
   prepared_by: p.preparedBy || '',
+  project_type: p.projectType || 'GC',
   logo_url: p.logoUrl || null,
   milestones: p.tasks || p.milestones || [],
   equipment_owned: p.equipmentOwned || [],
@@ -19,6 +20,7 @@ const fromDbProject = (row) => ({
   jobName: row.job_name || '',
   client: row.client || '',
   preparedBy: row.prepared_by || '',
+  projectType: row.project_type || 'GC',
   logoUrl: row.logo_url || null,
   tasks: row.milestones || [],
   equipmentOwned: row.equipment_owned || [],
@@ -97,6 +99,8 @@ const toDbWeekly = (w) => ({
   hindrances: w.hindrances || '',
   additional_delays: w.additionalDelays || '',
   next_oac_meeting: w.nextOACMeeting || '',
+  meeting_outcomes: w.meetingOutcomes || [],
+  outstanding_items: w.outstandingItems || [],
   selected_photos: stripPhotoData(w.selectedPhotos),
   schedule_file_url: w.scheduleFileUrl || null,
   schedule_file_type: w.scheduleFileType || null,
@@ -118,6 +122,8 @@ const fromDbWeekly = (row) => ({
   hindrances: row.hindrances || '',
   additionalDelays: row.additional_delays || '',
   nextOACMeeting: row.next_oac_meeting || '',
+  meetingOutcomes: row.meeting_outcomes || [],
+  outstandingItems: row.outstanding_items || [],
   selectedPhotos: row.selected_photos || [],
   scheduleFileUrl: row.schedule_file_url || null,
   scheduleFileType: row.schedule_file_type || null,
@@ -142,6 +148,8 @@ const toDbCustom = (r) => ({
   hindrances: r.hindrances || '',
   additional_delays: r.additionalDelays || '',
   next_oac_meeting: r.nextOACMeeting || '',
+  meeting_outcomes: r.meetingOutcomes || [],
+  outstanding_items: r.outstandingItems || [],
   selected_photos: stripPhotoData(r.selectedPhotos),
   schedule_file_url: r.scheduleFileUrl || null,
   schedule_file_type: r.scheduleFileType || null,
@@ -165,9 +173,67 @@ const fromDbCustom = (row) => ({
   hindrances: row.hindrances || '',
   additionalDelays: row.additional_delays || '',
   nextOACMeeting: row.next_oac_meeting || '',
+  meetingOutcomes: row.meeting_outcomes || [],
+  outstandingItems: row.outstanding_items || [],
   selectedPhotos: row.selected_photos || [],
   scheduleFileUrl: row.schedule_file_url || null,
   scheduleFileType: row.schedule_file_type || null,
+})
+
+// ─── Project Documents ───────────────────────────────────────
+const toDbDocument = (d) => ({
+  id: d.id,
+  project_id: d.projectId,
+  title: d.title || '',
+  file_url: d.fileUrl || null,
+  file_path: d.filePath || null,
+  file_name: d.fileName || '',
+  file_type: d.fileType || '',
+  file_size: d.fileSize || 0,
+  tags: d.tags || [],
+  notes: d.notes || '',
+  extracted_text: d.extractedText || '',
+  uploader: d.uploader || '',
+  created_at: d.createdAt || new Date().toISOString(),
+})
+
+const fromDbDocument = (row) => ({
+  id: row.id,
+  projectId: row.project_id,
+  title: row.title || '',
+  fileUrl: row.file_url || null,
+  filePath: row.file_path || null,
+  fileName: row.file_name || '',
+  fileType: row.file_type || '',
+  fileSize: row.file_size || 0,
+  tags: row.tags || [],
+  notes: row.notes || '',
+  extractedText: row.extracted_text || '',
+  uploader: row.uploader || '',
+  createdAt: row.created_at,
+})
+
+// ─── Quick Notes ─────────────────────────────────────────────
+const toDbQuickNote = (n) => ({
+  id: n.id,
+  project_id: n.projectId,
+  text: n.text || '',
+  tags: n.tags || [],
+  photo_url: n.photoUrl || null,
+  photo_path: n.photoPath || null,
+  author: n.author || '',
+  created_at: n.createdAt || new Date().toISOString(),
+})
+
+const fromDbQuickNote = (row) => ({
+  id: row.id,
+  projectId: row.project_id,
+  text: row.text || '',
+  tags: row.tags || [],
+  photoUrl: row.photo_url || null,
+  photoPath: row.photo_path || null,
+  author: row.author || '',
+  createdAt: row.created_at,
 })
 
 // ─── Projects ────────────────────────────────────────────────
@@ -248,6 +314,91 @@ export async function deleteCustomReport(id) {
   if (!supabase) return
   const { error } = await supabase.from('custom_reports').delete().eq('id', id)
   if (error) console.error('deleteCustomReport error:', error)
+}
+
+// ─── Project Documents ───────────────────────────────────────
+export async function loadDocuments() {
+  if (!supabase) return []
+  const { data, error } = await supabase.from('project_documents').select('*').order('created_at', { ascending: false })
+  if (error) {
+    if (error.code === '42P01' || /relation .* does not exist/i.test(error.message || '')) {
+      console.warn('project_documents table not found — run the migration in supabase-schema.sql')
+      return []
+    }
+    console.error('loadDocuments error:', error)
+    return []
+  }
+  return data.map(fromDbDocument)
+}
+
+export async function saveDocument(doc) {
+  if (!supabase) return
+  const { error } = await supabase.from('project_documents').upsert(toDbDocument(doc))
+  if (error) console.error('saveDocument error:', error)
+}
+
+export async function deleteDocument(id) {
+  if (!supabase) return
+  const { error } = await supabase.from('project_documents').delete().eq('id', id)
+  if (error) console.error('deleteDocument error:', error)
+}
+
+// Upload a document file to Supabase Storage (uses the project-photos bucket under documents/ prefix)
+export async function uploadDocument(file, projectId, docId) {
+  if (!supabase || !navigator.onLine) {
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve({ url: e.target.result, path: null, pendingUpload: true })
+      reader.readAsDataURL(file)
+    })
+  }
+  const safeName = (file.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_')
+  const path = `documents/${projectId}/${docId}/${Date.now()}-${safeName}`
+  const { error } = await supabase.storage.from('project-photos').upload(path, file, { contentType: file.type || 'application/octet-stream' })
+  if (error) {
+    console.error('uploadDocument error:', error)
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve({ url: e.target.result, path: null, pendingUpload: true })
+      reader.readAsDataURL(file)
+    })
+  }
+  const { data: { publicUrl } } = supabase.storage.from('project-photos').getPublicUrl(path)
+  return { url: publicUrl, path }
+}
+
+export async function deleteDocumentFile(path) {
+  if (!supabase || !path) return
+  const { error } = await supabase.storage.from('project-photos').remove([path])
+  if (error) console.error('deleteDocumentFile error:', error)
+}
+
+// ─── Quick Notes ─────────────────────────────────────────────
+export async function loadQuickNotes() {
+  if (!supabase) return []
+  const { data, error } = await supabase.from('quick_notes').select('*').order('created_at', { ascending: false })
+  if (error) {
+    // Table may not exist yet — log once and return empty so the app keeps working
+    if (error.code === '42P01' || /relation .* does not exist/i.test(error.message || '')) {
+      console.warn('quick_notes table not found — run the migration in supabase-schema.sql')
+      return []
+    }
+    console.error('loadQuickNotes error:', error)
+    return []
+  }
+  return data.map(fromDbQuickNote)
+}
+
+export async function saveQuickNote(note) {
+  if (!supabase) return
+  const { error } = await supabase.from('quick_notes').upsert(toDbQuickNote(note))
+  if (error) console.error('saveQuickNote error:', error)
+}
+
+export async function deleteQuickNote(id) {
+  if (!supabase) return
+  const { error } = await supabase.from('quick_notes').delete().eq('id', id)
+  if (error) console.error('deleteQuickNote error:', error)
 }
 
 // ─── Photo Storage ───────────────────────────────────────────

@@ -1,4 +1,4 @@
-# BIC Field Reporter
+# 4J Field Reporter
 
 Construction daily & weekly reporting app. Internal tool — no authentication required.
 

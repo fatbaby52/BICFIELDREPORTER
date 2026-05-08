@@ -1,7 +1,7 @@
 {
-  "name": "BIC Field Reporter",
-  "short_name": "BIC Reporter",
-  "description": "Construction daily and weekly field reports for Blue Iron Corp",
+  "name": "4J Field Reporter",
+  "short_name": "4J Reporter",
+  "description": "Construction daily and weekly field reports for 4J Construction Service",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",
@@ -9,13 +9,7 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/icons/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "/logo-blue.png",
+      "src": "/logo-4j.png",
       "sizes": "200x200",
       "type": "image/png",
       "purpose": "any maskable"

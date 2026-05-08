@@ -1,5 +1,5 @@
-// BIC Field Reporter - Service Worker
-const CACHE_NAME = 'bic-reporter-v7';
+// 4J Field Reporter - Service Worker
+const CACHE_NAME = 'bic-reporter-v8';
 const OFFLINE_URL = '/offline.html';
 
 // Assets to cache immediately on install
@@ -7,7 +7,6 @@ const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/logo-blue.png',
   '/logo-4j.png',
   '/icons/icon-192.png',
   '/icons/icon-512.png'

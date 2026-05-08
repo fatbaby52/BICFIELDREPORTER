@@ -1,4 +1,4 @@
-# BIC Field Reporter
+# 4J Field Reporter
 
 A construction daily/weekly report tool built with React + Vite + Supabase.
 
@@ -11,12 +11,12 @@ A construction daily/weekly report tool built with React + Vite + Supabase.
 - [x] Voice Notes wired up with Web Speech API
 - [x] Project scaffolded for Supabase + Netlify deployment
 - [x] Dev server working (npm run dev)
-- [x] **Blue Iron Logo** - Updated to use logo-blue.png in app header, inline SVG for PDFs
+- [x] **4J Logo** - Updated to use logo-4j.png in app header, inline SVG for PDFs
 - [x] **Photo Descriptions** - Users can add descriptions when uploading photos
 - [x] **PDF Export with Photos** - Daily & Weekly PDFs show photos with descriptions
 - [x] **Weekly Reports on Dashboard** - Saved weekly reports appear on dashboard with view/edit/export
 - [x] **Accessibility Audit** - Added focus styles, skip links, ARIA labels, ErrorBoundary
-- [x] **Redesigned PDF Exports** - Professional styling with BIC branding
+- [x] **Redesigned PDF Exports** - Professional styling with 4J branding
 
 ### Completed (Session: 2026-03-01)
 - [x] **PDF Print Fix** - Rewrote print CSS to preserve grid/flex layouts with light theme instead of nuclear reset
@@ -55,4 +55,4 @@ npm run dev
 - `src/db.js` - Supabase data layer
 - `src/supabase.js` - Supabase client config
 - `supabase-schema.sql` - Database schema
-- `public/logo-blue.png` - Blue Iron logo
+- `public/logo-4j.png` - 4J logo
